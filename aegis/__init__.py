@@ -11,6 +11,7 @@ from aegis.engines.threat_feed import ThreatFeedEngine, ThreatFeedConfig
 from aegis.enclave.vault import KeyVault, AegisEnforcementError
 from aegis.escrow import EscrowQueue, EscrowConfig, EscrowedTransaction, EscrowStatus, IntentClassifier
 from aegis.enclave.tee import TEEEnclave, TEEConfig, TEEBackend, SoftwareBackend, AttestationReport
+from aegis.intent import NormalizedIntent, IntentProtocol, IntentAction
 
 __all__ = [
     "AegisFirewall",
@@ -32,6 +33,9 @@ __all__ = [
     "TEEBackend",
     "SoftwareBackend",
     "AttestationReport",
+    "NormalizedIntent",
+    "IntentProtocol",
+    "IntentAction",
 ]
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

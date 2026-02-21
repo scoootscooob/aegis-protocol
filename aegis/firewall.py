@@ -303,6 +303,28 @@ class AegisFirewall:
         # Hard block
         return self._record(verdict)
 
+    def evaluate_intent(self, intent: object) -> Verdict:
+        """Evaluate a :class:`~aegis.intent.NormalizedIntent` through all engines.
+
+        This is the **universal entry point** for multi-chain payloads.
+        The intent is translated to the standard payload dict format
+        that the existing engines understand.
+
+        .. code-block:: python
+
+            from aegis.intent import intent_from_evm_tx
+            intent = intent_from_evm_tx(tx_dict, price_usd=3000.0)
+            verdict = firewall.evaluate_intent(intent)
+        """
+        from aegis.intent import NormalizedIntent  # deferred to avoid circular
+
+        if not isinstance(intent, NormalizedIntent):
+            raise TypeError(
+                f"evaluate_intent() expects a NormalizedIntent, got {type(intent).__name__}"
+            )
+        payload = intent.to_aegis_payload()
+        return self.evaluate(payload, spend_amount=intent.capital_at_risk_usd)
+
     def sign_and_send(
         self,
         key_id: str,

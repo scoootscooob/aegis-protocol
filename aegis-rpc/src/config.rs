@@ -118,6 +118,40 @@ pub struct Config {
     /// Prevents immortal signatures that can be reused after the legitimate swap.
     /// 0 = disabled (backward compat).
     pub max_permit_duration_secs: u64,
+
+    // ── v2.0: Multi-Chain Configuration ─────────────────────────────
+
+    /// Enable Solana transaction interception (sendTransaction method).
+    /// When true, Solana JSON-RPC calls are analysed for unauthorized
+    /// writable accounts before forwarding.
+    /// false = disabled (default, backward compat).
+    pub svm_enabled: bool,
+
+    /// Comma-separated Solana account pubkeys allowed to be writable.
+    /// Empty = allow all (no whitelist enforcement).
+    pub svm_whitelisted_accounts: String,
+
+    /// Enable Bitcoin PSBT interception (signrawtransaction/signpsbt).
+    /// false = disabled (default, backward compat).
+    pub utxo_enabled: bool,
+
+    /// Maximum implicit miner fee in USD for Bitcoin PSBTs.
+    /// Transactions exceeding this are blocked (Conservation of Mass).
+    pub utxo_max_fee_usd: f64,
+
+    /// Fallback BTC/USD price for PSBT fee calculation.
+    pub btc_price_usd: f64,
+
+    /// Enable HTTP forward proxy on a separate port.
+    /// false = disabled (default, backward compat).
+    pub http_proxy_enabled: bool,
+
+    /// Port for the HTTP forward proxy (default 8080).
+    pub http_proxy_port: u16,
+
+    /// Comma-separated domains governed by the HTTP proxy.
+    /// Only these domains have their costs tracked.
+    pub http_governed_domains: String,
 }
 
 impl Config {
@@ -222,6 +256,35 @@ impl Config {
                 .unwrap_or_else(|_| "0".into())
                 .parse()
                 .unwrap_or(0),
+            // v2.0: Multi-Chain
+            svm_enabled: std::env::var("AEGIS_SVM_ENABLED")
+                .unwrap_or_else(|_| "false".into())
+                .parse()
+                .unwrap_or(false),
+            svm_whitelisted_accounts: std::env::var("AEGIS_SVM_WHITELISTED_ACCOUNTS")
+                .unwrap_or_else(|_| "".into()),
+            utxo_enabled: std::env::var("AEGIS_UTXO_ENABLED")
+                .unwrap_or_else(|_| "false".into())
+                .parse()
+                .unwrap_or(false),
+            utxo_max_fee_usd: std::env::var("AEGIS_UTXO_MAX_FEE_USD")
+                .unwrap_or_else(|_| "50.0".into())
+                .parse()
+                .unwrap_or(50.0),
+            btc_price_usd: std::env::var("AEGIS_BTC_PRICE_USD")
+                .unwrap_or_else(|_| "60000.0".into())
+                .parse()
+                .unwrap_or(60_000.0),
+            http_proxy_enabled: std::env::var("AEGIS_HTTP_PROXY_ENABLED")
+                .unwrap_or_else(|_| "false".into())
+                .parse()
+                .unwrap_or(false),
+            http_proxy_port: std::env::var("AEGIS_HTTP_PROXY_PORT")
+                .unwrap_or_else(|_| "8080".into())
+                .parse()
+                .unwrap_or(8080),
+            http_governed_domains: std::env::var("AEGIS_HTTP_GOVERNED_DOMAINS")
+                .unwrap_or_else(|_| "".into()),
         })
     }
 }

@@ -38,14 +38,17 @@
 mod config;
 mod fee;
 mod flashbots;
+mod http_proxy;
 mod inspector;
 mod router;
 mod rpc;
 mod sanitizer;
 mod simulator;
+mod svm_simulator;
 mod telemetry;
 mod threat_feed;
 mod types;
+mod utxo_guard;
 
 use anyhow::Result;
 use tracing_subscriber::{fmt, EnvFilter};

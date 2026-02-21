@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aegis-protocol"
-version = "0.1.0"
+version = "2.0.0"
 description = "Deterministic circuit breaker for autonomous AI agents. The financial seatbelt for the machine economy."
 requires-python = ">=3.9"
 license = "MIT"
@@ -38,6 +38,24 @@ demo = [
     "openai>=1.0.0",
     "web3>=6.0.0",
 ]
+automaton = [
+    "automaton>=0.1.0",
+]
+openclaw = [
+    "openclaw>=0.1.0",
+]
+langchain = [
+    "langchain-core>=0.2.0",
+]
+eliza = [
+    "eliza-framework>=0.1.0",
+]
+oracles = [
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+aegis = "aegis.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["aegis"]

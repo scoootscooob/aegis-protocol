@@ -74,6 +74,13 @@ class CapitalVelocityConfig:
     gtv_window_seconds: float = 300.0     # Window for cumulative GTV tracking
     gtv_cumulative_max: float = 10.0      # Max cumulative gas / cumulative value ratio
 
+    # ── v2.0: Currency Normalization Oracle ────────────────────────
+    # When set, the engine multiplies spend amounts by the oracle price
+    # (asset → USD) before applying the PID controller.  This lets
+    # $5 of ETH and $5 of Stripe API spend hit the same limit.
+    # When None (default), the engine works in raw native units.
+    price_oracle: Any = None  # Callable[[str], float] | None
+
 
 @dataclass
 class CapitalVelocityEngine:

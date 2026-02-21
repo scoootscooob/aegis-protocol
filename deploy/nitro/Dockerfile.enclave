@@ -1,0 +1,41 @@
+# Aegis Nitro Enclave — Minimal Python runtime for vault signing.
+#
+# Build:  docker build -f Dockerfile.enclave -t aegis-enclave .
+# EIF:    nitro-cli build-enclave --docker-uri aegis-enclave --output-file aegis.eif
+# Run:    nitro-cli run-enclave --eif-path aegis.eif --memory 512 --cpu-count 2
+#
+# The enclave has NO network access, NO disk access, NO debug access.
+# The ONLY I/O channel is vsock with the parent EC2 instance.
+
+FROM python:3.9-slim AS builder
+
+WORKDIR /app
+
+# Copy only the core aegis package (no demo, no dapp, no tests)
+COPY aegis/ /app/aegis/
+COPY pyproject.toml /app/
+
+# Install minimal dependencies
+RUN pip install --no-cache-dir cryptography>=42.0.0 pydantic>=2.0.0
+
+# Copy the vsock server
+COPY deploy/nitro/vsock_server.py /app/
+
+# ── Runtime ──────────────────────────────────────────────────────
+
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Copy installed packages and app from builder
+COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
+COPY --from=builder /app /app
+
+# Non-root user
+RUN useradd -m aegis
+USER aegis
+
+# The enclave communicates ONLY via vsock (port 5000)
+EXPOSE 5000
+
+ENTRYPOINT ["python", "vsock_server.py"]
