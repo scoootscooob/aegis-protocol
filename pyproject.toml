@@ -37,6 +37,8 @@ proxy = [
 demo = [
     "openai>=1.0.0",
     "web3>=6.0.0",
+    "anthropic>=0.40.0",
+    "google-genai>=1.0.0",
 ]
 automaton = [
     "automaton>=0.1.0",
