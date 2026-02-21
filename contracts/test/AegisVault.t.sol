@@ -1008,6 +1008,65 @@ contract AegisVaultTest is Test {
         assertEq(bareVault.maxUserOpGas(), 1_000_000);
         assertEq(bareVault.maxRevertStrikes(), 5);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // v1.0.4 Kill-Shot 3: Bridge Refund Hijacking Defense
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_ks3_arbitrum_selector_constant() public pure {
+        // Verify Arbitrum createRetryableTicket selector
+        bytes4 selector = bytes4(keccak256("createRetryableTicket(address,uint256,uint256,address,address,uint256,uint256,bytes)"));
+        assertEq(selector, bytes4(0x679b6ded));
+    }
+
+    function test_ks3_bridge_calldata_layout() public pure {
+        // Verify ABI encoding of createRetryableTicket
+        // Build calldata where sender is in excessFeeRefundAddress (word 3)
+        address sender = address(0xB0B);
+        bytes memory calldata_ = abi.encodeWithSelector(
+            bytes4(0x679b6ded),
+            address(0xDEAD),  // to
+            uint256(0),        // l2CallValue
+            uint256(0),        // maxSubmissionCost
+            sender,            // excessFeeRefundAddress
+            sender,            // callValueRefundAddress
+            uint256(0),        // gasLimit
+            uint256(0),        // maxFeePerGas
+            bytes("")          // data
+        );
+        // Extract excessFeeRefundAddress from word 3 (bytes 100-131)
+        // Address is in the last 20 bytes of the word (bytes 112-131)
+        address extracted;
+        assembly {
+            // Skip: 32 (length prefix) + 4 (selector) + 96 (3 words) = 132
+            extracted := mload(add(calldata_, 132))
+        }
+        assertEq(extracted, sender);
+    }
+
+    function test_ks3_bridge_hijack_detected() public pure {
+        // Demonstrate the hijack: attacker in excessFeeRefundAddress
+        address sender = address(0xB0B);
+        address attacker = address(0xBAD);
+        bytes memory calldata_ = abi.encodeWithSelector(
+            bytes4(0x679b6ded),
+            address(0xDEAD),  // to
+            uint256(0),        // l2CallValue
+            uint256(0),        // maxSubmissionCost
+            attacker,          // excessFeeRefundAddress ← HIJACKED
+            sender,            // callValueRefundAddress
+            uint256(0),        // gasLimit
+            uint256(0),        // maxFeePerGas
+            bytes("")          // data
+        );
+        address extracted;
+        assembly {
+            extracted := mload(add(calldata_, 132))
+        }
+        // The extracted address is the attacker, not the sender
+        assertTrue(extracted != sender);
+        assertEq(extracted, attacker);
+    }
 }
 
 /// @dev Dummy contract used for EXTCODEHASH testing (ZERO-DAY 2)

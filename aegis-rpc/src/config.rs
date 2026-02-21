@@ -89,6 +89,35 @@ pub struct Config {
     /// If receipt.gasUsed / simulated.gasUsed > this ratio, record a strike.
     /// 0.0 = disabled.
     pub gas_anomaly_ratio: f64,
+
+    // ── v1.0.4: Kill-Shot Configuration ──────────────────────────────
+
+    /// Kill-Shot 1 (Bundler Illusion): ERC-4337 Bundler address for tx.origin.
+    /// When set, the simulator overrides tx.origin to this address instead of
+    /// defaulting to tx.caller, matching ERC-4337 on-chain reality where
+    /// tx.origin is the Bundler (e.g., Alchemy), not the agent.
+    /// Empty string = disabled (backward compat).
+    pub bundler_address: String,
+
+    /// Kill-Shot 2 (PVG Heist): Maximum preVerificationGas allowed.
+    /// ERC-4337 PVG is a flat Bundler fee paid BEFORE execution, invisible
+    /// to the EVM simulator. Capping it prevents Paymaster drain.
+    /// 0 = disabled (backward compat).
+    pub max_pre_verification_gas: u64,
+
+    /// Kill-Shot 3 (Bridge Refund Hijack): Enable bridge parameter validation.
+    /// When true, validates that refund addresses in bridge calldata (Arbitrum,
+    /// Optimism) match the sender to prevent excess fee theft.
+    pub bridge_refund_check: bool,
+
+    /// Kill-Shot 3: Comma-separated list of known bridge contract addresses.
+    pub bridge_contracts: String,
+
+    /// Kill-Shot 4 (Permit2 Time-Bomb): Maximum permit signature duration in seconds.
+    /// EIP-712 signatures with expiration/deadline beyond this window are rejected.
+    /// Prevents immortal signatures that can be reused after the legitimate swap.
+    /// 0 = disabled (backward compat).
+    pub max_permit_duration_secs: u64,
 }
 
 impl Config {
@@ -177,6 +206,22 @@ impl Config {
                 .unwrap_or_else(|_| "0.0".into())
                 .parse()
                 .unwrap_or(0.0),
+            bundler_address: std::env::var("AEGIS_BUNDLER_ADDRESS")
+                .unwrap_or_else(|_| "".into()),
+            max_pre_verification_gas: std::env::var("AEGIS_MAX_PVG")
+                .unwrap_or_else(|_| "0".into())
+                .parse()
+                .unwrap_or(0),
+            bridge_refund_check: std::env::var("AEGIS_BRIDGE_REFUND_CHECK")
+                .unwrap_or_else(|_| "false".into())
+                .parse()
+                .unwrap_or(false),
+            bridge_contracts: std::env::var("AEGIS_BRIDGE_CONTRACTS")
+                .unwrap_or_else(|_| "".into()),
+            max_permit_duration_secs: std::env::var("AEGIS_MAX_PERMIT_DURATION")
+                .unwrap_or_else(|_| "0".into())
+                .parse()
+                .unwrap_or(0),
         })
     }
 }

@@ -40,6 +40,17 @@ from cryptography.fernet import Fernet
 if TYPE_CHECKING:
     from aegis.firewall import AegisFirewall
 
+# v1.0.4 Kill-Shot 4: Known temporal bound field names in EIP-712 messages.
+# These fields control how long a signed Permit/approval remains valid.
+# An immortal signature (uint256.max) can be weaponized as a time-bomb.
+_TEMPORAL_BOUND_FIELDS = frozenset({
+    "deadline", "expiration", "sigDeadline", "expiry",
+    "validBefore", "validAfter",
+})
+
+# uint256 max — the immortal signature sentinel value
+_UINT256_MAX = 2**256 - 1
+
 
 class AegisEnforcementError(Exception):
     """Raised when the vault refuses to sign because the firewall blocked.
@@ -248,6 +259,77 @@ class KeyVault:
             # can at least remove the local binding)
             hex_key = "0" * len(hex_key)  # noqa: F841
 
+    # ── v1.0.4 Kill-Shot 4: Permit2 Time-Bomb Defense ──────────
+
+    def _validate_permit_temporal_bounds(
+        self,
+        message: dict[str, Any],
+        max_duration_secs: int,
+    ) -> None:
+        """Validate temporal bounds in EIP-712 messages.
+
+        v1.0.4 Kill-Shot 4 (Permit2 Time-Bomb): Checks all known temporal
+        fields (deadline, expiration, sigDeadline, expiry, validBefore).
+
+        - ``type(uint256).max`` → always reject (immortal signature)
+        - Duration exceeds ``max_duration_secs`` → reject
+
+        Raises
+        ------
+        AegisEnforcementError
+            If a temporal field exceeds the configured maximum duration.
+        """
+        import time as _time
+
+        now = int(_time.time())
+
+        for field_name in _TEMPORAL_BOUND_FIELDS:
+            raw_value = message.get(field_name)
+            if raw_value is None:
+                continue
+
+            # Normalize to int
+            try:
+                if isinstance(raw_value, str):
+                    if raw_value.startswith("0x"):
+                        temporal_val = int(raw_value, 16)
+                    else:
+                        temporal_val = int(raw_value)
+                else:
+                    temporal_val = int(raw_value)
+            except (ValueError, TypeError):
+                continue
+
+            # Check for immortal signature (uint256.max)
+            if temporal_val >= _UINT256_MAX:
+                raise AegisEnforcementError(
+                    reason=(
+                        f"KILL-SHOT 4 (PERMIT2 TIME-BOMB): EIP-712 field "
+                        f"'{field_name}' set to type(uint256).max — signature "
+                        f"is IMMORTAL. After the legitimate swap, the attacker "
+                        f"can reuse this signature indefinitely via "
+                        f"Permit2.transferFrom()."
+                    ),
+                    engine="PermitTemporalValidator",
+                    code="BLOCK_PERMIT_IMMORTAL_SIGNATURE",
+                )
+
+            # Check for excessive duration
+            duration = temporal_val - now
+            if duration > max_duration_secs:
+                raise AegisEnforcementError(
+                    reason=(
+                        f"KILL-SHOT 4 (PERMIT2 TIME-BOMB): EIP-712 field "
+                        f"'{field_name}' expires in {duration}s "
+                        f"({duration // 3600}h) — exceeds max allowed "
+                        f"{max_duration_secs}s ({max_duration_secs // 60}min). "
+                        f"Signatures with excessive lifetimes can be weaponized "
+                        f"as time-bombs."
+                    ),
+                    engine="PermitTemporalValidator",
+                    code="BLOCK_PERMIT_EXPIRY_TOO_LONG",
+                )
+
     # ── GOD-TIER 1: EIP-712 Silent Dagger Defense ──────────────
 
     # Known dangerous EIP-712 primary types that authorize token movement.
@@ -340,6 +422,17 @@ class KeyVault:
                     engine="ChainIdValidator",
                     code="BLOCK_CROSS_CHAIN_REPLAY",
                 )
+
+        # ── v1.0.4 Kill-Shot 4: Permit2 Time-Bomb Defense ──────────
+        # Before signing ANY EIP-712 message with temporal bounds, validate
+        # that expiration/deadline fields don't create immortal signatures.
+        if self._firewall is not None:
+            max_permit_dur = getattr(
+                self._firewall.config, "max_permit_duration_secs", 0
+            )
+            if max_permit_dur > 0:
+                msg_body = typed_data.get("message", {})
+                self._validate_permit_temporal_bounds(msg_body, max_permit_dur)
 
         if primary_type in self._DANGEROUS_PRIMARY_TYPES:
             message = typed_data.get("message", {})
@@ -505,10 +598,16 @@ def _compute_tvar(tx_dict: dict[str, Any], chain_id: int = 0) -> float:
 
     max_gas_cost = gas * max_fee_per_gas
 
+    # v1.0.4 Kill-Shot 2: Include preVerificationGas in TVAR.
+    # PVG is a flat ERC-4337 Bundler fee paid BEFORE execution, invisible
+    # to the EVM simulator. An attacker inflates PVG to drain the Paymaster.
+    pvg = tx_dict.get("preVerificationGas", 0)
+    pvg_cost = pvg * max_fee_per_gas
+
     # v1.0.3 Bounty 3: Include L1 data posting fee for L2 rollups
     l1_fee = _compute_l1_data_fee(tx_dict, chain_id)
 
-    return float(value + max_gas_cost + l1_fee)
+    return float(value + max_gas_cost + pvg_cost + l1_fee)
 
 
 def _tx_dict_to_aegis_payload(tx_dict: dict[str, Any]) -> dict[str, Any]:

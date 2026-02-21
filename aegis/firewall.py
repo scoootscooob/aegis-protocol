@@ -89,6 +89,18 @@ class AegisConfig:
     # 0.0 = disabled.
     gas_anomaly_ratio: float = 0.0
 
+    # ── v1.0.4 Kill-Shot 2: PVG Heist Defense ────────────────────
+    # Maximum preVerificationGas allowed in ERC-4337 UserOperations.
+    # PVG is a flat Bundler fee invisible to the EVM simulator.
+    # 0 = disabled (backward compat).
+    max_pre_verification_gas: int = 0
+
+    # ── v1.0.4 Kill-Shot 4: Permit2 Time-Bomb Defense ────────────
+    # Maximum duration (seconds) for EIP-712 permit/deadline fields.
+    # If expiration/deadline exceeds current_time + this value, refuse.
+    # 0 = disabled (backward compat).
+    max_permit_duration_secs: int = 0
+
 
 @dataclass
 class AegisFirewall:

@@ -310,6 +310,163 @@ fn parse_gas_used_from_receipt(result: &serde_json::Value) -> u64 {
         .unwrap_or(0)
 }
 
+/// v1.0.4 Kill-Shot 3 (Bridge Refund Hijack): Known bridge function selectors.
+mod bridge_selectors {
+    /// Arbitrum `createRetryableTicket(address,uint256,uint256,address,address,uint256,uint256,bytes)`
+    /// Selector: keccak256("createRetryableTicket(address,uint256,uint256,address,address,uint256,uint256,bytes)")[:4]
+    pub const ARBITRUM_CREATE_RETRYABLE_TICKET: [u8; 4] = [0x67, 0x9b, 0x6d, 0xed];
+
+    /// Optimism `depositTransaction(address,uint256,uint64,bool,bytes)`
+    /// Selector: keccak256("depositTransaction(address,uint256,uint64,bool,bytes)")[:4]
+    pub const OPTIMISM_DEPOSIT_TRANSACTION: [u8; 4] = [0xe9, 0xe0, 0x5c, 0x42];
+}
+
+/// v1.0.4 Kill-Shot 3 (Bridge Refund Hijack): Validate bridge calldata parameters.
+///
+/// Arbitrum `createRetryableTicket` has hidden refund addresses:
+///   - Word 3 (offset 96): `excessFeeRefundAddress`
+///   - Word 4 (offset 128): `callValueRefundAddress`
+/// These receive excess gas refunds. If they don't match the sender,
+/// an attacker steals excess fees by overpaying gas.
+///
+/// Returns Ok(()) if valid or not a bridge call, Err(reason) if hijack detected.
+fn validate_bridge_params(
+    config: &Config,
+    from: &str,
+    to: &str,
+    data: &[u8],
+) -> Result<(), String> {
+    if !config.bridge_refund_check {
+        return Ok(()); // Feature disabled
+    }
+
+    // Check if `to` is a known bridge contract
+    let bridge_contracts: Vec<String> = config
+        .bridge_contracts
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if bridge_contracts.is_empty() {
+        return Ok(()); // No bridge contracts configured
+    }
+
+    let to_lower = to.to_lowercase();
+    if !bridge_contracts.contains(&to_lower) {
+        return Ok(()); // Not a bridge contract
+    }
+
+    // Need at least selector + data
+    if data.len() < 4 {
+        return Ok(()); // Not enough data to be a bridge call
+    }
+
+    let selector = &data[0..4];
+    let from_lower = from.to_lowercase();
+
+    // ── Arbitrum createRetryableTicket ────────────────────────────
+    // ABI: createRetryableTicket(
+    //   address to,                    // word 0 (offset 4)
+    //   uint256 l2CallValue,           // word 1 (offset 36)
+    //   uint256 maxSubmissionCost,     // word 2 (offset 68)
+    //   address excessFeeRefundAddress,// word 3 (offset 100)
+    //   address callValueRefundAddress,// word 4 (offset 132)
+    //   uint256 gasLimit,              // word 5 (offset 164)
+    //   uint256 maxFeePerGas,          // word 6 (offset 196)
+    //   bytes calldata                 // word 7+ (offset 228+)
+    // )
+    // Addresses are right-aligned in 32-byte words: bytes [offset+12..offset+32]
+    if selector == bridge_selectors::ARBITRUM_CREATE_RETRYABLE_TICKET {
+        // Word 3: excessFeeRefundAddress
+        // Starts at byte 4 + 3*32 = 100; address at 100+12=112 to 100+32=132
+        if data.len() >= 132 {
+            let excess_refund = format!("0x{}", hex::encode(&data[112..132]));
+            if excess_refund.to_lowercase() != from_lower {
+                return Err(format!(
+                    "AEGIS KILL-SHOT 3 (BRIDGE REFUND HIJACK): Arbitrum createRetryableTicket \
+                     excessFeeRefundAddress={} != sender={}. An attacker overpays gas \
+                     and steals the excess fee refund.",
+                    excess_refund, from
+                ));
+            }
+        }
+
+        // Word 4: callValueRefundAddress
+        // Starts at byte 4 + 4*32 = 132; address at 132+12=144 to 132+32=164
+        if data.len() >= 164 {
+            let value_refund = format!("0x{}", hex::encode(&data[144..164]));
+            if value_refund.to_lowercase() != from_lower {
+                return Err(format!(
+                    "AEGIS KILL-SHOT 3 (BRIDGE REFUND HIJACK): Arbitrum createRetryableTicket \
+                     callValueRefundAddress={} != sender={}. Excess value refunded to attacker.",
+                    value_refund, from
+                ));
+            }
+        }
+    }
+
+    // ── Optimism depositTransaction ──────────────────────────────
+    // ABI: depositTransaction(
+    //   address _to,         // word 0 (offset 4)
+    //   uint256 _value,      // word 1 (offset 36)
+    //   uint64 _gasLimit,    // word 2 (offset 68)
+    //   bool _isCreation,    // word 3 (offset 100)
+    //   bytes _data          // word 4+ (offset 132+)
+    // )
+    // For Optimism, the `msg.sender` on L2 is the aliased L1 sender.
+    // The `_to` field (word 0) is the L2 recipient — check it matches sender.
+    if selector == bridge_selectors::OPTIMISM_DEPOSIT_TRANSACTION {
+        // Word 0: _to address. Starts at byte 4; address at 4+12=16 to 4+32=36
+        if data.len() >= 36 {
+            let l2_recipient = format!("0x{}", hex::encode(&data[16..36]));
+            if l2_recipient.to_lowercase() != from_lower {
+                return Err(format!(
+                    "AEGIS KILL-SHOT 3 (BRIDGE REFUND HIJACK): Optimism depositTransaction \
+                     _to={} != sender={}. L2 recipient is a different address.",
+                    l2_recipient, from
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// v1.0.4 Kill-Shot 2 (PVG Heist): Enforce preVerificationGas ceiling.
+///
+/// ERC-4337 UserOperations have `preVerificationGas` — a flat fee paid to
+/// the Bundler BEFORE execution starts. The EVM simulator only measures
+/// execution gas, so an attacker can set PVG=15M + maxFeePerGas=2000gwei
+/// to drain $30k from the Paymaster without triggering any simulation alarm.
+///
+/// Returns Ok(()) if within ceiling, Err(reason) if ceiling exceeded.
+fn enforce_pvg_ceiling(config: &Config, tx: &serde_json::Value) -> Result<(), String> {
+    if config.max_pre_verification_gas == 0 {
+        return Ok(()); // Feature disabled
+    }
+
+    let pvg = tx.get("preVerificationGas")
+        .and_then(|v| v.as_str())
+        .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+        .or_else(|| {
+            tx.get("preVerificationGas")
+                .and_then(|v| v.as_u64())
+        })
+        .unwrap_or(0);
+
+    if pvg > config.max_pre_verification_gas {
+        return Err(format!(
+            "AEGIS KILL-SHOT 2 (PVG HEIST): preVerificationGas={} exceeds ceiling={}. \
+             PVG is a flat Bundler fee paid BEFORE execution — invisible to the EVM \
+             simulator. An attacker inflates PVG to drain the Paymaster.",
+            pvg, config.max_pre_verification_gas
+        ));
+    }
+
+    Ok(())
+}
+
 /// v1.0.2 Patch 3: Validate chainId in EIP-712 typed data domain.
 /// Returns an error message if the chainId is missing, zero, or mismatched.
 fn validate_eip712_chain_id(
@@ -369,6 +526,85 @@ fn validate_eip712_chain_id(
         )),
         Some(_) => None, // chainId matches — all good
     }
+}
+
+/// v1.0.4 Kill-Shot 4 (Permit2 Time-Bomb): Validate temporal bounds in EIP-712.
+///
+/// Checks known temporal fields (deadline, expiration, sigDeadline, expiry,
+/// validBefore) in the EIP-712 message body. If any field exceeds the maximum
+/// allowed duration from now, or is set to uint256.max (immortal), reject.
+fn validate_permit_deadline(
+    typed_data: &serde_json::Value,
+    max_duration_secs: u64,
+) -> Result<(), String> {
+    if max_duration_secs == 0 {
+        return Ok(()); // Feature disabled
+    }
+
+    let empty_obj = serde_json::json!({});
+    let message = typed_data.get("message").unwrap_or(&empty_obj);
+
+    let temporal_fields = [
+        "deadline", "expiration", "sigDeadline", "expiry", "validBefore",
+    ];
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let uint256_max_str =
+        "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+
+    for field in &temporal_fields {
+        let raw = match message.get(field) {
+            Some(v) => v,
+            None => continue,
+        };
+
+        // Parse temporal value
+        let temporal_val: Option<u64> = if let Some(n) = raw.as_u64() {
+            Some(n)
+        } else if let Some(s) = raw.as_str() {
+            if s == uint256_max_str
+                || s == "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            {
+                return Err(format!(
+                    "AEGIS KILL-SHOT 4 (PERMIT2 TIME-BOMB): EIP-712 field '{}' \
+                     set to uint256.max — signature is IMMORTAL. An attacker can \
+                     reuse this signature indefinitely via Permit2.transferFrom().",
+                    field
+                ));
+            }
+            if s.starts_with("0x") || s.starts_with("0X") {
+                u64::from_str_radix(
+                    s.trim_start_matches("0x").trim_start_matches("0X"),
+                    16,
+                )
+                .ok()
+            } else {
+                s.parse().ok()
+            }
+        } else {
+            None
+        };
+
+        if let Some(val) = temporal_val {
+            if val > now + max_duration_secs {
+                return Err(format!(
+                    "AEGIS KILL-SHOT 4 (PERMIT2 TIME-BOMB): EIP-712 field '{}' \
+                     expires in {}s ({}h from now) — exceeds max allowed {}s. \
+                     Signatures with excessive lifetimes are time-bombs.",
+                    field,
+                    val.saturating_sub(now),
+                    val.saturating_sub(now) / 3600,
+                    max_duration_secs
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// v1.0.2 Patch 4: Extract UserOperation gas from calldata.
@@ -540,6 +776,22 @@ pub async fn handle_rpc(
                 return resp;
             }
 
+            // ── v1.0.4 Kill-Shot 4: Permit2 Time-Bomb Defense ──────
+            // Before analyzing dangerous types, check temporal bounds.
+            // Even "safe" primary types can have abusive deadlines.
+            if let Err(deadline_err) = validate_permit_deadline(
+                &parsed_data, config.max_permit_duration_secs
+            ) {
+                warn!("{}", deadline_err);
+                let (resp, tx_hash) = JsonRpcResponse::aegis_synthetic_send(
+                    req.id, &deadline_err,
+                );
+                if let Ok(mut store) = BLOCKED_TX_STORE.lock() {
+                    store.insert(tx_hash, deadline_err);
+                }
+                return resp;
+            }
+
             let (is_dangerous, synthetic_action, risk_desc) =
                 permit_decoder::analyze_typed_data(&parsed_data);
 
@@ -700,6 +952,32 @@ pub async fn handle_rpc(
             return JsonRpcResponse::error(req.id, -32602, format!("Invalid params: {e}"));
         }
     };
+
+    // ── v1.0.4 Kill-Shot 2: PVG Heist Defense ────────────────────
+    // Check preVerificationGas BEFORE simulation, since PVG is invisible
+    // to the EVM simulator. This must run before ANY simulation.
+    if let Some(tx_obj) = req.params.as_array().and_then(|a| a.first()) {
+        if let Err(pvg_reason) = enforce_pvg_ceiling(config, tx_obj) {
+            warn!("{}", pvg_reason);
+            let (resp, tx_hash) = JsonRpcResponse::aegis_synthetic_send(req.id, &pvg_reason);
+            if let Ok(mut store) = BLOCKED_TX_STORE.lock() {
+                store.insert(tx_hash, pvg_reason);
+            }
+            return resp;
+        }
+    }
+
+    // ── v1.0.4 Kill-Shot 3: Bridge Refund Hijack Defense ─────────
+    // Validate bridge calldata BEFORE simulation. If the refund addresses
+    // in Arbitrum/Optimism bridge calls don't match the sender, block.
+    if let Err(bridge_reason) = validate_bridge_params(config, &from, &to, &data) {
+        warn!("{}", bridge_reason);
+        let (resp, tx_hash) = JsonRpcResponse::aegis_synthetic_send(req.id, &bridge_reason);
+        if let Ok(mut store) = BLOCKED_TX_STORE.lock() {
+            store.insert(tx_hash, bridge_reason);
+        }
+        return resp;
+    }
 
     // ── ZERO-DAY 2: Pessimistic Session Key Check ──────────────
     // Before ANY engine runs, check if the sender's session key has
@@ -936,12 +1214,26 @@ fn canonicalize_send_request(
     let value_hex = format!("0x{:x}", value);
     let data_hex = format!("0x{}", hex::encode(data));
 
-    let canonical_tx = serde_json::json!({
+    let mut canonical_tx = serde_json::json!({
         "from": from,
         "to": to,
         "value": value_hex,
         "data": data_hex,
     });
+
+    // v1.0.4 Kill-Shot 2: Preserve gas fields for PVG/TVAR accounting.
+    // Without this, canonicalization would drop preVerificationGas, maxFeePerGas,
+    // etc., causing the upstream node to use default gas params.
+    if let Some(tx_obj) = req.params.as_array().and_then(|a| a.first()) {
+        for gas_field in &[
+            "gas", "gasLimit", "maxFeePerGas", "maxPriorityFeePerGas",
+            "preVerificationGas",
+        ] {
+            if let Some(val) = tx_obj.get(gas_field) {
+                canonical_tx[gas_field] = val.clone();
+            }
+        }
+    }
 
     JsonRpcRequest {
         jsonrpc: req.jsonrpc.clone(),
@@ -1032,5 +1324,220 @@ mod tests {
         assert_eq!(tx["to"].as_str().unwrap(), "0xhacker");
         assert_eq!(tx["from"].as_str().unwrap(), "0xabc");
         assert_eq!(tx["value"].as_str().unwrap(), "0x100");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // v1.0.4 Kill-Shot 2: PVG Heist — enforce_pvg_ceiling tests
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_pvg_ceiling_disabled_when_zero() {
+        let config = Config::from_env().unwrap();
+        // Default max_pre_verification_gas = 0 → disabled
+        let tx = serde_json::json!({"preVerificationGas": "0xF4240"}); // 1M
+        assert!(enforce_pvg_ceiling(&config, &tx).is_ok());
+    }
+
+    #[test]
+    fn test_pvg_ceiling_blocks_when_exceeded() {
+        let mut config = Config::from_env().unwrap();
+        config.max_pre_verification_gas = 500_000;
+        let tx = serde_json::json!({"preVerificationGas": "0xF4240"}); // 1M > 500k
+        let result = enforce_pvg_ceiling(&config, &tx);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("PVG HEIST"));
+    }
+
+    #[test]
+    fn test_pvg_ceiling_allows_within_limit() {
+        let mut config = Config::from_env().unwrap();
+        config.max_pre_verification_gas = 1_000_000;
+        let tx = serde_json::json!({"preVerificationGas": "0x7A120"}); // 500k < 1M
+        assert!(enforce_pvg_ceiling(&config, &tx).is_ok());
+    }
+
+    #[test]
+    fn test_pvg_ceiling_decimal_string() {
+        let mut config = Config::from_env().unwrap();
+        config.max_pre_verification_gas = 100_000;
+        let tx = serde_json::json!({"preVerificationGas": 200_000}); // u64 value
+        let result = enforce_pvg_ceiling(&config, &tx);
+        assert!(result.is_err());
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // v1.0.4 Kill-Shot 3: Bridge Refund Hijacking tests
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_bridge_validation_disabled_by_default() {
+        let config = Config::from_env().unwrap();
+        // Default bridge_refund_check = false → disabled
+        let result = validate_bridge_params(
+            &config,
+            "0xSender",
+            "0xBridge",
+            &[0x67, 0x9b, 0x6d, 0xed], // Arbitrum selector
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_bridge_validation_arbitrum_valid_refund() {
+        let mut config = Config::from_env().unwrap();
+        config.bridge_refund_check = true;
+        config.bridge_contracts = "0xbridge".to_string();
+
+        let sender = "0xabcdef1234567890abcdef1234567890abcdef12";
+        let sender_bytes = hex::decode(&sender[2..]).unwrap();
+
+        // Build valid calldata: selector + 5 words (sender in words 3 & 4)
+        let mut data = vec![0x67, 0x9b, 0x6d, 0xed]; // selector
+        data.extend_from_slice(&[0u8; 12]); data.extend_from_slice(&sender_bytes); // word 0 (to)
+        data.extend_from_slice(&[0u8; 32]); // word 1 (l2CallValue)
+        data.extend_from_slice(&[0u8; 32]); // word 2 (maxSubmissionCost)
+        data.extend_from_slice(&[0u8; 12]); data.extend_from_slice(&sender_bytes); // word 3 (excessFeeRefund)
+        data.extend_from_slice(&[0u8; 12]); data.extend_from_slice(&sender_bytes); // word 4 (callValueRefund)
+
+        let result = validate_bridge_params(&config, sender, "0xbridge", &data);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_bridge_validation_arbitrum_hijacked_refund() {
+        let mut config = Config::from_env().unwrap();
+        config.bridge_refund_check = true;
+        config.bridge_contracts = "0xbridge".to_string();
+
+        let sender = "0xabcdef1234567890abcdef1234567890abcdef12";
+        let sender_bytes = hex::decode(&sender[2..]).unwrap();
+        let attacker_bytes = hex::decode("bad0000000000000000000000000000000000bad").unwrap();
+
+        // Build hijacked calldata: attacker in word 3
+        let mut data = vec![0x67, 0x9b, 0x6d, 0xed]; // selector
+        data.extend_from_slice(&[0u8; 12]); data.extend_from_slice(&sender_bytes);   // word 0
+        data.extend_from_slice(&[0u8; 32]); // word 1
+        data.extend_from_slice(&[0u8; 32]); // word 2
+        data.extend_from_slice(&[0u8; 12]); data.extend_from_slice(&attacker_bytes);  // word 3 HIJACKED
+        data.extend_from_slice(&[0u8; 12]); data.extend_from_slice(&sender_bytes);   // word 4
+
+        let result = validate_bridge_params(&config, sender, "0xbridge", &data);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("BRIDGE REFUND HIJACK"));
+    }
+
+    #[test]
+    fn test_bridge_validation_not_bridge_contract() {
+        let mut config = Config::from_env().unwrap();
+        config.bridge_refund_check = true;
+        config.bridge_contracts = "0xbridge".to_string();
+
+        // Target is NOT a bridge contract → skip validation
+        let result = validate_bridge_params(
+            &config,
+            "0xSender",
+            "0xNotABridge",
+            &[0x67, 0x9b, 0x6d, 0xed],
+        );
+        assert!(result.is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // v1.0.4 Kill-Shot 4: Permit2 Time-Bomb tests
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_permit_deadline_disabled_when_zero() {
+        let typed_data = serde_json::json!({
+            "message": {"deadline": "115792089237316195423570985008687907853269984665640564039457584007913129639935"}
+        });
+        // max_duration_secs = 0 → disabled
+        assert!(validate_permit_deadline(&typed_data, 0).is_ok());
+    }
+
+    #[test]
+    fn test_permit_deadline_immortal_rejected() {
+        let typed_data = serde_json::json!({
+            "message": {"deadline": "115792089237316195423570985008687907853269984665640564039457584007913129639935"}
+        });
+        let result = validate_permit_deadline(&typed_data, 3600);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("IMMORTAL"));
+    }
+
+    #[test]
+    fn test_permit_deadline_immortal_hex_rejected() {
+        let typed_data = serde_json::json!({
+            "message": {"deadline": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
+        });
+        let result = validate_permit_deadline(&typed_data, 3600);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("IMMORTAL"));
+    }
+
+    #[test]
+    fn test_permit_deadline_excessive_rejected() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let excessive = now + 7 * 86400; // 7 days
+        let typed_data = serde_json::json!({
+            "message": {"deadline": excessive}
+        });
+        let result = validate_permit_deadline(&typed_data, 3600); // 1 hour max
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("TIME-BOMB"));
+    }
+
+    #[test]
+    fn test_permit_deadline_reasonable_allowed() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let reasonable = now + 1800; // 30 minutes
+        let typed_data = serde_json::json!({
+            "message": {"deadline": reasonable}
+        });
+        assert!(validate_permit_deadline(&typed_data, 3600).is_ok());
+    }
+
+    #[test]
+    fn test_permit_multiple_temporal_fields() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let typed_data = serde_json::json!({
+            "message": {
+                "deadline": now + 1800,      // OK
+                "sigDeadline": now + 7*86400  // EXCESSIVE
+            }
+        });
+        let result = validate_permit_deadline(&typed_data, 3600);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_canonicalize_preserves_gas_fields() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "eth_sendTransaction".into(),
+            params: serde_json::json!([{
+                "from": "0xabc",
+                "to": "0xdef",
+                "value": "0x100",
+                "maxFeePerGas": "0x4A817C800",
+                "preVerificationGas": "0x7A120"
+            }]),
+            id: serde_json::json!(1),
+        };
+        let canonical = canonicalize_send_request(
+            &req, "0xabc", "0xdef", 256, &[],
+        );
+        let tx = canonical.params.as_array().unwrap()[0].clone();
+        assert_eq!(tx["maxFeePerGas"].as_str().unwrap(), "0x4A817C800");
+        assert_eq!(tx["preVerificationGas"].as_str().unwrap(), "0x7A120");
     }
 }

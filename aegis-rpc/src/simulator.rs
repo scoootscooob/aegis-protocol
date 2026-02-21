@@ -142,6 +142,25 @@ pub async fn simulate_transaction(
             tx.data = data.to_vec().into();
             tx.gas_limit = clamped_gas;
             tx.gas_price = U256::from(20_000_000_000u64); // 20 gwei
+            // ── v1.0.4 Kill-Shot 1: Bundler Illusion Defense ──────────
+            // In ERC-4337, tx.origin is the Bundler (Alchemy/Flashbots),
+            // NOT the agent. A malicious contract checking
+            // `if (tx.origin == BundlerAddr) { drain() }` passes simulation
+            // (where origin == caller) but drains on-chain.
+            //
+            // In revm v17, `tx.caller` maps to both `tx.origin` AND the
+            // top-level `msg.sender`. For ERC-4337 handleOps flow this is
+            // correct: the Bundler IS the EOA that calls EntryPoint.handleOps().
+            // Setting caller to the bundler address makes simulation match
+            // the on-chain reality where tx.origin = bundler.
+            //
+            // Note: This overrides the agent address. The ORIGINAL sender is
+            // preserved in `from` for all other checks (session key, etc.).
+            if !config.bundler_address.is_empty() {
+                if let Ok(bundler_addr) = Address::from_str(&config.bundler_address) {
+                    tx.caller = bundler_addr;
+                }
+            }
         })
         .modify_cfg_env(|cfg| {
             cfg.chain_id = config.chain_id; // v1.0.3 Bounty 3: use configured chain ID
