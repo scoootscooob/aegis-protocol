@@ -36,6 +36,7 @@ contract PlimsollVaultTest is Test {
         // Deploy modules — vault-aware
         velocityMod = new VelocityLimitModule(
             address(vault),
+            owner,       // owner
             10 ether,    // maxPerHour
             5 ether,     // maxSingleTx
             3600         // windowSeconds
@@ -446,7 +447,7 @@ contract PlimsollVaultTest is Test {
         // Deploy new modules
         vm.startPrank(owner);
         VelocityLimitModule newVel = new VelocityLimitModule(
-            address(vault), 20 ether, 10 ether, 3600
+            address(vault), owner, 20 ether, 10 ether, 3600
         );
         vault.setModules(address(newVel), address(0), address(0));
         vm.stopPrank();

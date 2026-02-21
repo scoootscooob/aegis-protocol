@@ -42,6 +42,7 @@
 //!   └──────────────────────────────────────────────────────────┘
 //! ```
 
+mod api;
 mod schema;
 mod evm_listener;
 mod solana_listener;
@@ -91,9 +92,21 @@ async fn main() {
         handles.push(handle);
     }
 
-    info!("All chain listeners spawned — indexing live events");
+    // Spawn the HTTP API server
+    let api_proc = Arc::clone(&processor);
+    let api_handle = tokio::spawn(async move {
+        let router = api::build_router(api_proc);
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
+            .await
+            .expect("Failed to bind API server on :3001");
+        info!("HTTP API server listening on :3001");
+        axum::serve(listener, router).await.expect("API server failed");
+    });
+    handles.push(api_handle);
 
-    // Wait for all listeners (they run forever)
+    info!("All chain listeners + API server spawned — indexing live events");
+
+    // Wait for all tasks (they run forever)
     for handle in handles {
         let _ = handle.await;
     }

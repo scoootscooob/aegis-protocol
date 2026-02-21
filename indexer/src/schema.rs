@@ -165,6 +165,7 @@ pub enum EventType {
     GasAnomalyDetected,
     ProxyUpgradeBlocked,
     CosignRejected,
+    VaultCreated,
 }
 
 /// Universal indexed event — normalized across all chains.
@@ -318,6 +319,26 @@ CREATE TABLE IF NOT EXISTS vault_state (
 
 CREATE INDEX IF NOT EXISTS idx_vault_state_chain
     ON vault_state (chain_id, vault_address);
+
+-- Vault registry: tracks factory-deployed vaults for owner lookup
+CREATE TABLE IF NOT EXISTS vault_registry (
+    vault_address     TEXT NOT NULL,
+    owner_address     TEXT NOT NULL,
+    chain_id          BIGINT NOT NULL,
+    chain_name        TEXT NOT NULL,
+    velocity_module   TEXT NOT NULL DEFAULT '',
+    whitelist_module  TEXT NOT NULL DEFAULT '',
+    drawdown_module   TEXT NOT NULL DEFAULT '',
+    deploy_tx_hash    TEXT NOT NULL DEFAULT '',
+    block_number      BIGINT NOT NULL DEFAULT 0,
+    deployed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (vault_address, chain_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vault_registry_owner
+    ON vault_registry (owner_address, chain_id);
+CREATE INDEX IF NOT EXISTS idx_vault_registry_chain
+    ON vault_registry (chain_id, deployed_at DESC);
 "#;
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -413,5 +434,23 @@ mod tests {
         assert!(CREATE_SCHEMA_SQL.contains("vault_state"));
         assert!(CREATE_SCHEMA_SQL.contains("emergency_locked"));
         assert!(CREATE_SCHEMA_SQL.contains("active_sessions"));
+    }
+
+    #[test]
+    fn test_sql_schema_has_vault_registry() {
+        assert!(CREATE_SCHEMA_SQL.contains("vault_registry"));
+        assert!(CREATE_SCHEMA_SQL.contains("owner_address"));
+        assert!(CREATE_SCHEMA_SQL.contains("velocity_module"));
+        assert!(CREATE_SCHEMA_SQL.contains("idx_vault_registry_owner"));
+    }
+
+    #[test]
+    fn test_vault_created_event_type() {
+        let event_type = EventType::VaultCreated;
+        let json = serde_json::to_string(&event_type).unwrap();
+        assert!(json.contains("VaultCreated"));
+
+        let parsed: EventType = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, EventType::VaultCreated);
     }
 }

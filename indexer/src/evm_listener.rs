@@ -37,6 +37,9 @@ pub mod event_topics {
     /// GasAnomalyDetected(address indexed agent, uint256 gasConsumed, uint256 gasForwarded)
     pub const GAS_ANOMALY: &str =
         "0x7h8f00bg2i1fdi05jf6i8i7ghgh8idg2h9h1i1f6g7jeh3j2i1h0g9f8e7d7d8e9";
+    /// VaultCreated(address indexed owner, address indexed vault, address velocity, address whitelist, address drawdown)
+    pub const VAULT_CREATED: &str =
+        "0x8a35acfbc15ff81a39ae7d344fd709f28e8600b4aa8c65c6b64bfe7fe36bd19b";
 }
 
 /// Raw log from an EVM RPC response.
@@ -116,6 +119,62 @@ impl EvmListener {
         )
         .unwrap_or(0);
 
+        let id = format!("{}:{}:{}", self.config.chain_id, log.transaction_hash, log_index);
+
+        // VaultCreated has a different log layout:
+        //   topic[1] = owner (indexed), topic[2] = vault (indexed)
+        //   data = velocity(32) + whitelist(32) + drawdown(32)
+        if event_type == EventType::VaultCreated {
+            let owner_addr = if log.topics.len() > 1 {
+                format!("0x{}", &log.topics[1][26..])
+            } else {
+                String::new()
+            };
+            let vault_addr = if log.topics.len() > 2 {
+                format!("0x{}", &log.topics[2][26..])
+            } else {
+                String::new()
+            };
+
+            // Parse 3 ABI-encoded addresses from data (each 32 bytes = 64 hex chars)
+            // data starts with "0x", so offset by 2
+            let data = &log.data;
+            let velocity_addr = if data.len() >= 66 {
+                format!("0x{}", &data[26..66])
+            } else { String::new() };
+            let whitelist_addr = if data.len() >= 130 {
+                format!("0x{}", &data[90..130])
+            } else { String::new() };
+            let drawdown_addr = if data.len() >= 194 {
+                format!("0x{}", &data[154..194])
+            } else { String::new() };
+
+            return Some(IndexedEvent {
+                id,
+                chain_name: self.config.name.clone(),
+                chain_id: self.config.chain_id,
+                tx_hash: log.transaction_hash.clone(),
+                log_index,
+                event_type,
+                vault_address: vault_addr,
+                agent_address: owner_addr, // owner stored in agent_address field
+                target_address: String::new(),
+                amount_raw: 0,
+                amount_usd: 0.0,
+                reason: String::new(),
+                block_number,
+                block_timestamp: Utc::now(),
+                indexed_at: Utc::now(),
+                metadata: serde_json::json!({
+                    "factory_address": log.address,
+                    "velocity_module": velocity_addr,
+                    "whitelist_module": whitelist_addr,
+                    "drawdown_module": drawdown_addr,
+                }),
+            });
+        }
+
+        // Standard event parsing
         // Extract agent address from topic[1] (indexed parameter)
         let agent = if log.topics.len() > 1 {
             format!("0x{}", &log.topics[1][26..]) // last 20 bytes of 32-byte topic
@@ -136,8 +195,6 @@ impl EvmListener {
         } else {
             0
         };
-
-        let id = format!("{}:{}:{}", self.config.chain_id, log.transaction_hash, log_index);
 
         Some(IndexedEvent {
             id,
@@ -163,11 +220,19 @@ impl EvmListener {
 }
 
 /// Classify an event by its topic[0] hash.
-fn classify_event(_topic0: &str) -> Option<EventType> {
-    // In production, use proper keccak256 hashes for exact matching.
-    // For now, return a default — the real implementation will match
-    // against exact keccak256 event signatures from PlimsollVault.sol ABI.
-    Some(EventType::ExecutionApproved)
+fn classify_event(topic0: &str) -> Option<EventType> {
+    match topic0 {
+        event_topics::EXECUTION_APPROVED => Some(EventType::ExecutionApproved),
+        event_topics::EXECUTION_BLOCKED => Some(EventType::ExecutionBlocked),
+        event_topics::SESSION_KEY_ISSUED => Some(EventType::SessionKeyIssued),
+        event_topics::SESSION_KEY_REVOKED => Some(EventType::SessionKeyRevoked),
+        event_topics::DEPOSITED => Some(EventType::Deposited),
+        event_topics::EMERGENCY_LOCK => Some(EventType::EmergencyLock),
+        event_topics::PAYMASTER_AUTO_REVOKED => Some(EventType::PaymasterAutoRevoked),
+        event_topics::GAS_ANOMALY => Some(EventType::GasAnomalyDetected),
+        event_topics::VAULT_CREATED => Some(EventType::VaultCreated),
+        _ => None,
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────
@@ -258,6 +323,48 @@ mod tests {
 
         assert_eq!(event.chain_name, "ethereum");
         assert_eq!(event.chain_id, 1);
+    }
+
+    #[test]
+    fn test_parse_vault_created_event() {
+        let listener = EvmListener::new(make_config());
+        // Build a VaultCreated log:
+        //   topic[0] = VAULT_CREATED hash
+        //   topic[1] = owner (indexed)
+        //   topic[2] = vault (indexed)
+        //   data = velocity(32 bytes) + whitelist(32 bytes) + drawdown(32 bytes)
+        let log = RawLog {
+            address: "0xfactoryaddress000000000000000000000000000".into(),
+            topics: vec![
+                event_topics::VAULT_CREATED.into(),
+                "0x000000000000000000000000aaaaaaaabbbbbbbbccccccccddddddddeeeeeeee".into(),
+                "0x0000000000000000000000001111111122222222333333334444444455555555".into(),
+            ],
+            data: "0x0000000000000000000000006666666677777777888888889999999900000000000000000000000000000000aaaaaaaa11111111222222223333333344444444000000000000000000000000bbbbbbbb55555555666666667777777788888888".into(),
+            block_number: "0x100".into(),
+            transaction_hash: "0xfactorytx123".into(),
+            log_index: "0x0".into(),
+            block_timestamp: "".into(),
+        };
+        let event = listener.parse_log(&log).unwrap();
+        assert_eq!(event.event_type, EventType::VaultCreated);
+        // owner stored in agent_address
+        assert_eq!(event.agent_address, "0xaaaaaaaabbbbbbbbccccccccddddddddeeeeeeee");
+        // vault from topic[2]
+        assert_eq!(event.vault_address, "0x1111111122222222333333334444444455555555");
+        assert_eq!(event.amount_raw, 0);
+    }
+
+    #[test]
+    fn test_classify_vault_created() {
+        let result = classify_event(event_topics::VAULT_CREATED);
+        assert_eq!(result, Some(EventType::VaultCreated));
+    }
+
+    #[test]
+    fn test_classify_unknown_returns_none() {
+        let result = classify_event("0xdeadbeef");
+        assert!(result.is_none());
     }
 
     #[test]

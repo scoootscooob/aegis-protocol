@@ -285,6 +285,60 @@ export const PLIMSOLL_ATTESTATION_ABI = [
   },
 ] as const;
 
+// ── PlimsollVaultFactory ABI ───────────────────────────────────
+
+export const PLIMSOLL_FACTORY_ABI = [
+  {
+    name: "createVault",
+    type: "function",
+    inputs: [
+      { name: "maxPerHour", type: "uint256" },
+      { name: "maxSingleTx", type: "uint256" },
+      { name: "maxDrawdownBps", type: "uint256" },
+    ],
+    outputs: [
+      { name: "vault", type: "address" },
+      { name: "velocity", type: "address" },
+      { name: "whitelist", type: "address" },
+      { name: "drawdown", type: "address" },
+    ],
+    stateMutability: "payable",
+  },
+  {
+    name: "getVaultsByOwner",
+    type: "function",
+    inputs: [{ name: "owner_", type: "address" }],
+    outputs: [{ name: "", type: "address[]" }],
+    stateMutability: "view",
+  },
+  {
+    name: "getVaultCount",
+    type: "function",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    name: "getAllVaults",
+    type: "function",
+    inputs: [],
+    outputs: [{ name: "", type: "address[]" }],
+    stateMutability: "view",
+  },
+  // Events
+  {
+    name: "VaultCreated",
+    type: "event",
+    inputs: [
+      { name: "owner", type: "address", indexed: true },
+      { name: "vault", type: "address", indexed: true },
+      { name: "velocity", type: "address", indexed: false },
+      { name: "whitelist", type: "address", indexed: false },
+      { name: "drawdown", type: "address", indexed: false },
+    ],
+  },
+] as const;
+
 // ── Contract Addresses (update after deployment) ─────────────
 
 export const CONTRACTS = {
@@ -294,5 +348,6 @@ export const CONTRACTS = {
     whitelistModule: "0x0000000000000000000000000000000000000000" as `0x${string}`,
     drawdownModule: "0x0000000000000000000000000000000000000000" as `0x${string}`,
     attestation: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+    factory: "0x0000000000000000000000000000000000000000" as `0x${string}`,
   },
 } as const;

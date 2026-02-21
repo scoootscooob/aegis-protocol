@@ -17,6 +17,7 @@ contract VelocityLimitModuleTest is Test {
 
         mod = new VelocityLimitModule(
             vault,
+            address(this), // owner
             10 ether,    // maxPerHour
             5 ether,     // maxSingleTx
             3600         // windowSeconds
@@ -33,7 +34,7 @@ contract VelocityLimitModuleTest is Test {
     }
 
     function test_constructor_default_window() public {
-        VelocityLimitModule m = new VelocityLimitModule(vault, 1 ether, 1 ether, 0);
+        VelocityLimitModule m = new VelocityLimitModule(vault, address(this), 1 ether, 1 ether, 0);
         assertEq(m.windowSeconds(), 3600);
     }
 

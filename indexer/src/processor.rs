@@ -65,7 +65,12 @@ impl EventProcessor {
         // ── 2. Enrichment ────────────────────────────────────────
         event = self.enrich_event(event);
 
-        // ── 3. Batch accumulation ────────────────────────────────
+        // ── 3. Register vault if VaultCreated ───────────────────
+        if event.event_type == EventType::VaultCreated {
+            self.register_vault(&event);
+        }
+
+        // ── 4. Batch accumulation ────────────────────────────────
         {
             let mut stats = self.stats.lock().unwrap();
             stats.total_received += 1;
@@ -142,6 +147,82 @@ impl EventProcessor {
     /// Get the pending batch size.
     pub fn pending_count(&self) -> usize {
         self.pending_batch.lock().unwrap().len()
+    }
+
+    /// Find vaults by owner address (scans pending batch).
+    ///
+    /// In production, this would query the vault_registry table.
+    /// For now, it scans the in-memory pending batch for VaultCreated events.
+    pub fn find_vaults_by_owner(&self, owner: &str) -> Vec<crate::api::VaultInfo> {
+        let batch = self.pending_batch.lock().unwrap();
+        batch
+            .iter()
+            .filter(|e| {
+                e.event_type == EventType::VaultCreated
+                    && e.agent_address.to_lowercase() == owner
+            })
+            .map(|e| {
+                let velocity = e.metadata.get("velocity_module")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let whitelist = e.metadata.get("whitelist_module")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let drawdown = e.metadata.get("drawdown_module")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                crate::api::VaultInfo {
+                    vault_address: e.vault_address.clone(),
+                    chain_id: e.chain_id,
+                    chain_name: e.chain_name.clone(),
+                    velocity_module: velocity,
+                    whitelist_module: whitelist,
+                    drawdown_module: drawdown,
+                    deploy_tx_hash: e.tx_hash.clone(),
+                    block_number: e.block_number,
+                }
+            })
+            .collect()
+    }
+
+    /// Register a newly created vault in the vault_registry.
+    ///
+    /// In production, this would INSERT into vault_registry.
+    /// For now, it logs the registration for observability.
+    fn register_vault(&self, event: &IndexedEvent) {
+        let velocity = event.metadata.get("velocity_module")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let whitelist = event.metadata.get("whitelist_module")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let drawdown = event.metadata.get("drawdown_module")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        info!(
+            "Registering vault {} for owner {} on {} (velocity={}, whitelist={}, drawdown={})",
+            event.vault_address,
+            event.agent_address, // owner stored in agent_address for VaultCreated
+            event.chain_name,
+            velocity,
+            whitelist,
+            drawdown,
+        );
+
+        // In production:
+        // ```sql
+        // INSERT INTO vault_registry
+        //   (vault_address, owner_address, chain_id, chain_name,
+        //    velocity_module, whitelist_module, drawdown_module,
+        //    deploy_tx_hash, block_number)
+        // VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        // ON CONFLICT (vault_address, chain_id) DO NOTHING
+        // ```
     }
 
     // ── Price feeds (fallback values) ────────────────────────────
@@ -290,6 +371,29 @@ mod tests {
         let stats = processor.get_stats();
         assert_eq!(stats.total_received, 2);
         assert_eq!(stats.total_deduplicated, 1);
+    }
+
+    #[test]
+    fn test_vault_created_event_processed() {
+        let processor = EventProcessor::new("postgres://test".into());
+        let mut event = make_event("ethereum", 1, "0xfactory", 0);
+        event.event_type = EventType::VaultCreated;
+        event.vault_address = "0xNewVault".into();
+        event.agent_address = "0xOwner".into(); // owner in agent_address
+        event.amount_raw = 0;
+        event.metadata = serde_json::json!({
+            "factory_address": "0xFactory",
+            "velocity_module": "0xVel",
+            "whitelist_module": "0xWl",
+            "drawdown_module": "0xDd",
+        });
+
+        assert!(processor.process_event(event));
+        assert_eq!(processor.pending_count(), 1);
+
+        let batch = processor.pending_batch.lock().unwrap();
+        assert_eq!(batch[0].event_type, EventType::VaultCreated);
+        assert_eq!(batch[0].vault_address, "0xNewVault");
     }
 
     #[test]

@@ -41,12 +41,13 @@ contract VelocityLimitModule is IVelocityLimitModule {
 
     constructor(
         address vault_,
+        address owner_,
         uint256 maxPerHour_,
         uint256 maxSingleTx_,
         uint256 windowSeconds_
     ) {
         vault = vault_;
-        owner = msg.sender;
+        owner = owner_;
         maxPerHour = maxPerHour_;
         maxSingleTx = maxSingleTx_;
         windowSeconds = windowSeconds_ > 0 ? windowSeconds_ : 3600;

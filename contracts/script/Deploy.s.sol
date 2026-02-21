@@ -54,6 +54,7 @@ contract Deploy is Script {
         // ── 2. Deploy VelocityLimitModule ────────────────────────
         VelocityLimitModule velocity = new VelocityLimitModule(
             address(vault),
+            vaultOwner,
             maxPerHour,
             maxSingleTx,
             3600          // 1 hour window

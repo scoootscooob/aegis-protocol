@@ -10,10 +10,12 @@ import {
   useEmergencyLocked,
   useModuleAddresses,
 } from "@/hooks/useVault";
+import { useOwnerVaults } from "@/hooks/useFactory";
 import { SessionKeyManager } from "./SessionKeyManager";
 import { DepositWithdraw } from "./DepositWithdraw";
 import { EmergencyPanel } from "./EmergencyPanel";
 import { ModuleStatus } from "./ModuleStatus";
+import { DeployVault } from "./DeployVault";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
 
@@ -21,6 +23,8 @@ export function VaultDashboard() {
   const { address: userAddress, isConnected } = useAccount();
   const [vaultAddress, setVaultAddress] = useState<string>("");
   const [activeVault, setActiveVault] = useState<Address | null>(null);
+
+  const ownerVaults = useOwnerVaults(userAddress);
 
   const balance = useVaultBalance(activeVault || ZERO_ADDRESS);
   const owner = useVaultOwner(activeVault || ZERO_ADDRESS);
@@ -72,11 +76,50 @@ export function VaultDashboard() {
     );
   }
 
+  const vaultList = (ownerVaults.data as Address[] | undefined) || [];
+
   return (
     <div className="space-y-6">
-      {/* Vault Selector */}
+      {/* Deploy New Vault */}
+      <DeployVault
+        onVaultCreated={(addr) => {
+          setActiveVault(addr);
+          ownerVaults.refetch();
+        }}
+      />
+
+      {/* Your Vaults (from factory registry) */}
+      {vaultList.length > 0 && (
+        <div className="card">
+          <h3 className="font-mono text-xs text-ink/60 mb-4 tracking-widest uppercase">
+            Your Vaults
+          </h3>
+          <div className="space-y-2">
+            {vaultList.map((addr, i) => (
+              <button
+                key={addr}
+                className={`w-full text-left p-3 border font-mono text-sm transition-colors duration-150 ${
+                  activeVault === addr
+                    ? "border-ink bg-surface"
+                    : "border-ink/20 hover:border-ink/40"
+                }`}
+                onClick={() => setActiveVault(addr)}
+              >
+                <span className="font-mono text-[10px] text-terracotta tracking-widest uppercase">
+                  [ Vault_{String(i).padStart(2, "0")} ]
+                </span>
+                <span className="block mt-1 truncate">{addr}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Manual Vault Address Input */}
       <div className="card">
-        <h2 className="font-mono text-xs text-ink/60 mb-4 tracking-widest uppercase">Vault Address</h2>
+        <h2 className="font-mono text-xs text-ink/60 mb-4 tracking-widest uppercase">
+          {vaultList.length > 0 ? "Or Enter Address Manually" : "Vault Address"}
+        </h2>
         <div className="flex gap-3">
           <input
             type="text"
