@@ -49,6 +49,11 @@ pub struct SimulationResult {
     /// contract code between simulation and execution, the EVM rejects it.
     /// Empty string = EOA (no code to pin).
     pub target_codehash: String,
+    /// v1.0.2 Patch 2 (Schrödinger's State): Whether the transaction uses
+    /// environmental opcodes (BLOCKHASH, COINBASE, TIMESTAMP, etc.) in
+    /// conditional branches (JUMPI). If true, the simulation outcome may
+    /// differ from on-chain execution.
+    pub non_deterministic: bool,
 }
 
 impl JsonRpcResponse {

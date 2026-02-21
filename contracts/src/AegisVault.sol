@@ -64,6 +64,13 @@ contract AegisVault {
     bool public requireCosign;            // Toggle for co-signing requirement
     mapping(bytes32 => bool) public usedNonces; // Replay protection
 
+    // ── ZERO-DAY 4 (v1.0.2): Paymaster Slashing Defense ────────────
+    // If N transactions pass simulation but revert on-chain, auto-revoke
+    // the session key to stop ERC-4337 Paymaster gas drain.
+    uint256 public maxUserOpGas;         // 0 = no cap (backward compat)
+    uint256 public maxRevertStrikes;     // 0 = disabled
+    mapping(address => uint256) public revertCount;
+
     // ── Events ──────────────────────────────────────────────────
 
     event Deposited(address indexed from, uint256 amount);
@@ -79,6 +86,9 @@ contract AegisVault {
     event EnclaveSignerUpdated(address indexed newSigner);
     event CosignRequirementChanged(bool required);
     event RealityDesyncBlocked(address indexed agent, uint256 simulatedBlock, uint256 currentBlock);
+    event PaymasterDefenseUpdated(uint256 maxGas, uint256 maxStrikes);
+    event PaymasterRevertStrike(address indexed agent, uint256 strikeCount);
+    event PaymasterAutoRevoked(address indexed agent, string reason);
 
     // ── Modifiers ───────────────────────────────────────────────
 
@@ -186,6 +196,15 @@ contract AegisVault {
     function setCosignRequired(bool required) external onlyOwner {
         requireCosign = required;
         emit CosignRequirementChanged(required);
+    }
+
+    /// @notice Configure Paymaster defense parameters.
+    /// @param maxGas_ Maximum gas per UserOperation (0 = disabled)
+    /// @param maxStrikes_ Auto-revoke after N reverts (0 = disabled)
+    function setPaymasterDefense(uint256 maxGas_, uint256 maxStrikes_) external onlyOwner {
+        maxUserOpGas = maxGas_;
+        maxRevertStrikes = maxStrikes_;
+        emit PaymasterDefenseUpdated(maxGas_, maxStrikes_);
     }
 
     /// @notice Two-step ownership transfer (start).
@@ -377,10 +396,35 @@ contract AegisVault {
             }
         }
 
+        // ── ZERO-DAY 4 (v1.0.2): UserOperation Gas Cap ───────────
+        // If maxUserOpGas is set, cap the gas forwarded to the target.
+        // This prevents ERC-4337 Paymaster gas griefing where txns pass
+        // simulation but burn excessive gas on-chain.
+        if (maxUserOpGas > 0) {
+            uint256 availableGas = gasleft();
+            require(
+                availableGas <= maxUserOpGas + 50000,  // +50k overhead buffer
+                "AegisVault: PAYMASTER DEFENSE - gas exceeds maxUserOpGas"
+            );
+        }
+
         // ── All physics passed — execute ────────────────────────
         sk.spentToday += value;
 
         (bool success, bytes memory result) = target.call{value: value}(data);
+
+        // ── ZERO-DAY 4 (v1.0.2): Revert Strike Tracking ─────────
+        // If execution reverts and maxRevertStrikes is set, track revert
+        // count per agent. If count exceeds threshold, auto-revoke session.
+        if (!success && maxRevertStrikes > 0) {
+            revertCount[agent] += 1;
+            emit PaymasterRevertStrike(agent, revertCount[agent]);
+            if (revertCount[agent] >= maxRevertStrikes) {
+                _revokeKey(agent, "PAYMASTER DEFENSE: too many reverts");
+                emit PaymasterAutoRevoked(agent, "revert strike limit exceeded");
+            }
+        }
+
         require(success, "AegisVault: execution failed");
 
         emit ExecutionApproved(agent, target, value);

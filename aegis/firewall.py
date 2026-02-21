@@ -69,6 +69,14 @@ class AegisConfig:
     cognitive_sever_enabled: bool = False  # Disabled by default
     on_cognitive_sever: Callable[[], None] | None = None  # Webhook callback
 
+    # ── ZERO-DAY 4 (v1.0.2): Paymaster Slashing Defense ────────
+    # Track post-simulation reverts per agent. If N transactions pass
+    # simulation but revert on-chain within a window, sever the agent's
+    # Paymaster connection to stop gas griefing.
+    revert_strike_max: int = 0               # 0 = disabled
+    revert_strike_window_secs: float = 300.0  # 5-minute rolling window
+    on_paymaster_sever: Callable[[], None] | None = None  # Webhook callback
+
 
 @dataclass
 class AegisFirewall:
@@ -109,6 +117,11 @@ class AegisFirewall:
     )
     _cognitive_severed: bool = field(default=False, init=False, repr=False)
     _sever_until: float = field(default=0.0, init=False, repr=False)
+    # ZERO-DAY 4 (v1.0.2): Paymaster Slashing — revert tracking
+    _revert_timestamps: deque = field(
+        default_factory=deque, init=False, repr=False
+    )
+    _paymaster_severed: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._threat_feed = ThreatFeedEngine(config=self.config.threat_feed)
@@ -164,6 +177,24 @@ class AegisFirewall:
                 self._cognitive_severed = False
                 self._strike_timestamps.clear()
                 logger.info("ZERO-DAY 4: Cognitive sever expired — resuming")
+
+        # ── ZERO-DAY 4 (v1.0.2): Paymaster Slashing — check sever state ──
+        # If too many post-simulation reverts detected, block ALL actions
+        # to stop gas griefing against the Enterprise Paymaster.
+        if self._paymaster_severed:
+            return self._record(Verdict(
+                code=VerdictCode.BLOCK_PAYMASTER_SEVERED,
+                reason=(
+                    "ZERO-DAY 4 (PAYMASTER SLASHING): Paymaster connection "
+                    "severed. Too many post-simulation reverts detected — "
+                    "agent is blocked to prevent gas drain."
+                ),
+                engine="PaymasterSever",
+                metadata={
+                    "revert_count": len(self._revert_timestamps),
+                    "threshold": self.config.revert_strike_max,
+                },
+            ))
 
         # Engine 0: Threat Feed — is target globally blacklisted?
         v = self._threat_feed.evaluate(payload)
@@ -287,6 +318,48 @@ class AegisFirewall:
         """List all pending escrowed transactions."""
         return self._escrow.list_pending()
 
+    # ── Paymaster revert tracking (ZERO-DAY 4, v1.0.2) ────────
+
+    def record_revert(self) -> None:
+        """Record a post-simulation on-chain revert.
+
+        Call this when a transaction that passed Aegis simulation reverts
+        on-chain. If the revert count exceeds ``revert_strike_max`` within
+        ``revert_strike_window_secs``, the agent's Paymaster connection
+        is severed (permanent until manual reset).
+        """
+        if self.config.revert_strike_max <= 0:
+            return  # Feature disabled
+
+        now = time.time()
+        self._revert_timestamps.append(now)
+
+        # Prune timestamps outside the rolling window
+        cutoff = now - self.config.revert_strike_window_secs
+        while (
+            self._revert_timestamps
+            and self._revert_timestamps[0] < cutoff
+        ):
+            self._revert_timestamps.popleft()
+
+        # Check if revert count exceeds threshold
+        if len(self._revert_timestamps) >= self.config.revert_strike_max:
+            self._paymaster_severed = True
+            logger.critical(
+                "ZERO-DAY 4 (v1.0.2): PAYMASTER SEVER TRIGGERED — "
+                "%d reverts in %.0fs window. Agent Paymaster connection severed.",
+                len(self._revert_timestamps),
+                self.config.revert_strike_window_secs,
+            )
+            # Fire webhook callback (exception-safe)
+            if self.config.on_paymaster_sever:
+                try:
+                    self.config.on_paymaster_sever()
+                except Exception:
+                    logger.exception(
+                        "ZERO-DAY 4 (v1.0.2): on_paymaster_sever callback failed"
+                    )
+
     # ── TEE enclave ──────────────────────────────────────────────
 
     @property
@@ -387,3 +460,6 @@ class AegisFirewall:
         self._strike_timestamps.clear()
         self._cognitive_severed = False
         self._sever_until = 0.0
+        # ZERO-DAY 4 (v1.0.2): Reset paymaster sever state
+        self._revert_timestamps.clear()
+        self._paymaster_severed = False

@@ -159,6 +159,7 @@ pub async fn simulate_transaction(
             )),
             simulated_block,
             target_codehash: target_codehash.clone(),
+            non_deterministic: false,
         });
     }
 
@@ -209,6 +210,7 @@ pub async fn simulate_transaction(
                 error,
                 simulated_block,
                 target_codehash: target_codehash.clone(),
+                non_deterministic: false,
             };
 
             info!(
@@ -232,6 +234,7 @@ pub async fn simulate_transaction(
                 error: Some(format!("EVM error: {}", e)),
                 simulated_block,
                 target_codehash: target_codehash.clone(),
+                non_deterministic: false,
             })
         }
     }

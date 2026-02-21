@@ -45,6 +45,31 @@ pub struct Config {
     /// Zero-Day 3: Maximum bundle deadline in seconds from current block timestamp.
     /// Prevents MEV builders from holding transactions indefinitely.
     pub max_bundle_deadline_secs: u64,
+
+    // ── v1.0.2: Zero-Day Patch Configuration ─────────────────────
+
+    /// Patch 1 (Trojan Receipt): Sanitize read-path RPC responses to strip
+    /// LLM control tokens injected in malicious contract return data.
+    pub sanitize_read_responses: bool,
+
+    /// Patch 2 (Schrödinger's State): Detect non-deterministic JUMPI conditions
+    /// caused by environmental opcodes (BLOCKHASH, COINBASE, TIMESTAMP, etc.).
+    pub detect_non_determinism: bool,
+
+    /// Patch 3 (Cross-Chain Replay): Expected chainId for EIP-712 domain
+    /// validation. 0 = disabled (backward compatibility).
+    pub expected_chain_id: u64,
+
+    /// Patch 4 (Paymaster Slashing): Maximum gas per UserOperation.
+    /// 0 = disabled.
+    pub max_userop_gas: u64,
+
+    /// Patch 4 (Paymaster Slashing): Maximum revert strikes before sever.
+    /// 0 = disabled.
+    pub revert_strike_max: u32,
+
+    /// Patch 4 (Paymaster Slashing): Rolling window in seconds for revert strikes.
+    pub revert_strike_window_secs: u64,
 }
 
 impl Config {
@@ -93,6 +118,30 @@ impl Config {
                 .unwrap_or_else(|_| "24".into())
                 .parse()
                 .unwrap_or(24),
+            sanitize_read_responses: std::env::var("AEGIS_SANITIZE_READS")
+                .unwrap_or_else(|_| "false".into())
+                .parse()
+                .unwrap_or(false),
+            detect_non_determinism: std::env::var("AEGIS_DETECT_NONDET")
+                .unwrap_or_else(|_| "false".into())
+                .parse()
+                .unwrap_or(false),
+            expected_chain_id: std::env::var("AEGIS_EXPECTED_CHAIN_ID")
+                .unwrap_or_else(|_| "0".into())
+                .parse()
+                .unwrap_or(0),
+            max_userop_gas: std::env::var("AEGIS_MAX_USEROP_GAS")
+                .unwrap_or_else(|_| "0".into())
+                .parse()
+                .unwrap_or(0),
+            revert_strike_max: std::env::var("AEGIS_REVERT_STRIKE_MAX")
+                .unwrap_or_else(|_| "0".into())
+                .parse()
+                .unwrap_or(0),
+            revert_strike_window_secs: std::env::var("AEGIS_REVERT_STRIKE_WINDOW")
+                .unwrap_or_else(|_| "300".into())
+                .parse()
+                .unwrap_or(300),
         })
     }
 }

@@ -93,6 +93,12 @@ class KeyVault:
     _secrets: dict[str, bytes] = field(default_factory=dict, init=False, repr=False)
     _firewall: Any = field(default=None, init=False, repr=False)  # AegisFirewall | None
 
+    # ZERO-DAY 3 (Dimension Tear): Expected chain ID for EIP-712 signing.
+    # When set, sign_typed_data() rejects any domain separator with missing,
+    # null, zero, or mismatched chainId to prevent cross-chain replay.
+    # None = chain ID validation disabled (backward compat).
+    _expected_chain_id: int | None = field(default=None, init=False, repr=False)
+
     def __post_init__(self) -> None:
         # Generate an ephemeral encryption key for this session.
         # In production, this comes from TEE/KMS.
@@ -118,6 +124,18 @@ class KeyVault:
     def has_firewall(self) -> bool:
         """True if a firewall is bound to this vault."""
         return self._firewall is not None
+
+    def set_expected_chain_id(self, chain_id: int) -> None:
+        """Set the expected chain ID for EIP-712 domain validation.
+
+        ZERO-DAY 3 (Dimension Tear): Once set, sign_typed_data() will reject
+        any EIP-712 payload whose domain separator is missing chainId or has
+        a mismatched chainId. This prevents cross-chain signature replay
+        attacks where a $5 approval on L2 is replayed on L1.
+        """
+        if chain_id <= 0:
+            raise ValueError(f"chain_id must be positive, got {chain_id}")
+        self._expected_chain_id = chain_id
 
     # ── Storage ──────────────────────────────────────────────────
 
@@ -243,12 +261,13 @@ class KeyVault:
         key_id: str,
         typed_data: dict[str, Any],
     ) -> str:
-        """Sign EIP-712 typed data with GOD-TIER 1 protection.
+        """Sign EIP-712 typed data with GOD-TIER 1 + ZERO-DAY 3 protection.
 
-        Before signing, the vault analyzes the EIP-712 payload to detect
-        dangerous signature types (Permit2, gasless swaps, etc.). If the
-        payload would authorize token movement, the vault runs the
-        equivalent on-chain action through the firewall.
+        Before signing, the vault:
+        1. ZERO-DAY 3: Validates the domain separator's chainId to prevent
+           cross-chain signature replay attacks.
+        2. GOD-TIER 1: Analyzes dangerous EIP-712 primary types (Permit2,
+           gasless swaps) and evaluates them through the firewall.
 
         Raises
         ------
@@ -256,6 +275,69 @@ class KeyVault:
             If the typed data would authorize a dangerous action.
         """
         primary_type = typed_data.get("primaryType", "")
+        domain = typed_data.get("domain", {})
+
+        # ── ZERO-DAY 3: Cross-Chain Permit Replay Defense ──────────
+        # Validate that the EIP-712 domain separator contains the
+        # correct chainId. Missing/null/zero/mismatched chainId means
+        # the signature could be replayed on any chain.
+        if self._expected_chain_id is not None:
+            domain_chain_id = domain.get("chainId")
+
+            if domain_chain_id is None:
+                raise AegisEnforcementError(
+                    reason=(
+                        f"ZERO-DAY 3 (Dimension Tear): EIP-712 domain "
+                        f"separator is MISSING chainId. Signature would be "
+                        f"replayable on ANY chain. Expected "
+                        f"chainId={self._expected_chain_id}."
+                    ),
+                    engine="ChainIdValidator",
+                    code="BLOCK_CROSS_CHAIN_REPLAY",
+                )
+
+            # Normalize to int (could be string hex "0x1" or int 1)
+            try:
+                if isinstance(domain_chain_id, str):
+                    if domain_chain_id.startswith("0x"):
+                        chain_id_val = int(domain_chain_id, 16)
+                    else:
+                        chain_id_val = int(domain_chain_id)
+                else:
+                    chain_id_val = int(domain_chain_id)
+            except (ValueError, TypeError):
+                raise AegisEnforcementError(
+                    reason=(
+                        f"ZERO-DAY 3 (Dimension Tear): EIP-712 domain "
+                        f"chainId is unparseable: {domain_chain_id!r}."
+                    ),
+                    engine="ChainIdValidator",
+                    code="BLOCK_CROSS_CHAIN_REPLAY",
+                )
+
+            if chain_id_val == 0:
+                raise AegisEnforcementError(
+                    reason=(
+                        f"ZERO-DAY 3 (Dimension Tear): EIP-712 domain "
+                        f"chainId=0 is a wildcard that allows replay on "
+                        f"any chain. Expected "
+                        f"chainId={self._expected_chain_id}."
+                    ),
+                    engine="ChainIdValidator",
+                    code="BLOCK_CROSS_CHAIN_REPLAY",
+                )
+
+            if chain_id_val != self._expected_chain_id:
+                raise AegisEnforcementError(
+                    reason=(
+                        f"ZERO-DAY 3 (Dimension Tear): EIP-712 domain "
+                        f"chainId={chain_id_val} does not match expected "
+                        f"chainId={self._expected_chain_id}. Cross-chain "
+                        f"replay attack possible."
+                    ),
+                    engine="ChainIdValidator",
+                    code="BLOCK_CROSS_CHAIN_REPLAY",
+                )
 
         if primary_type in self._DANGEROUS_PRIMARY_TYPES:
             message = typed_data.get("message", {})

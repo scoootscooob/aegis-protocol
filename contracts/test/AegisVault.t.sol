@@ -824,6 +824,49 @@ contract AegisVaultTest is Test {
         bareVault.executeWithCosign(dummyAddr, 0, "", nonce, deadline, simulatedBlock, fakeCodehash, v, r, s);
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // ZERO-DAY 4 (v1.0.2): Paymaster Slashing Defense
+    // ═══════════════════════════════════════════════════════════════
+
+    function test_paymaster_defense_defaults_disabled() public view {
+        // By default, maxUserOpGas and maxRevertStrikes are 0 (disabled)
+        assertEq(vault.maxUserOpGas(), 0);
+        assertEq(vault.maxRevertStrikes(), 0);
+    }
+
+    function test_paymaster_defense_set_by_owner() public {
+        vm.prank(owner);
+        vault.setPaymasterDefense(500000, 3);
+        assertEq(vault.maxUserOpGas(), 500000);
+        assertEq(vault.maxRevertStrikes(), 3);
+    }
+
+    function test_paymaster_defense_only_owner() public {
+        vm.prank(agent);
+        vm.expectRevert("AegisVault: not owner");
+        vault.setPaymasterDefense(500000, 3);
+    }
+
+    function test_paymaster_defense_emits_event() public {
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit AegisVault.PaymasterDefenseUpdated(500000, 3);
+        vault.setPaymasterDefense(500000, 3);
+    }
+
+    function test_paymaster_revert_count_tracks() public {
+        // Set up bare vault with revert tracking
+        vm.startPrank(owner);
+        AegisVault bareVault = new AegisVault(owner);
+        bareVault.deposit{value: 10 ether}();
+        bareVault.issueSessionKey(agent, 86400, 5 ether, 8 ether);
+        bareVault.setPaymasterDefense(0, 3); // 3 reverts max
+        vm.stopPrank();
+
+        // revertCount starts at 0
+        assertEq(bareVault.revertCount(agent), 0);
+    }
+
     function test_zero_day_2_correct_codehash_passes() public {
         (uint256 teePrivKey, ) = _setupCosign();
 

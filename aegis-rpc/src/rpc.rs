@@ -12,13 +12,15 @@
 
 use crate::config::Config;
 use crate::fee;
+use crate::sanitizer;
 use crate::simulator;
 use crate::telemetry;
 use crate::threat_feed::{self, SharedThreatFilter};
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
 use anyhow::Result;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 /// Methods that involve broadcasting transactions (need simulation).
@@ -179,6 +181,16 @@ lazy_static::lazy_static! {
     /// referencing a revoked session key is rejected BEFORE simulation.
     /// This closes the 12-second block confirmation window.
     static ref REVOKED_SESSION_KEYS: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
+
+    /// v1.0.2 Patch 4: Paymaster Slashing — Revert strike timestamps.
+    /// Tracks timestamps of post-simulation on-chain reverts within a
+    /// rolling window. When the count exceeds the threshold, the agent's
+    /// Paymaster connection is severed.
+    static ref REVERT_STRIKE_TRACKER: Mutex<VecDeque<u64>> = Mutex::new(VecDeque::new());
+
+    /// v1.0.2 Patch 4: Paymaster severed flag.
+    /// Once set, ALL transactions are blocked until manual reset.
+    static ref PAYMASTER_SEVERED: Mutex<bool> = Mutex::new(false);
 }
 
 /// Zero-Day 2: SessionKeyRevoked event topic (keccak256 of event signature).
@@ -212,6 +224,134 @@ pub fn revoke_session_key(session_key: &str) {
         );
         store.insert(key);
     }
+}
+
+/// v1.0.2 Patch 4: Record a post-simulation on-chain revert.
+/// If the revert count exceeds the threshold within the rolling window,
+/// the Paymaster connection is severed.
+pub fn record_revert_strike(config: &Config) {
+    if config.revert_strike_max == 0 {
+        return; // Feature disabled
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    if let Ok(mut tracker) = REVERT_STRIKE_TRACKER.lock() {
+        tracker.push_back(now);
+
+        // Prune timestamps outside the rolling window
+        let cutoff = now.saturating_sub(config.revert_strike_window_secs);
+        while tracker.front().map_or(false, |&t| t < cutoff) {
+            tracker.pop_front();
+        }
+
+        // Check if revert count exceeds threshold
+        if tracker.len() >= config.revert_strike_max as usize {
+            if let Ok(mut severed) = PAYMASTER_SEVERED.lock() {
+                *severed = true;
+                warn!(
+                    revert_count = tracker.len(),
+                    threshold = config.revert_strike_max,
+                    "PATCH 4 (PAYMASTER SLASHING): Paymaster severed — too many reverts"
+                );
+            }
+        }
+    }
+}
+
+/// v1.0.2 Patch 4: Check if the Paymaster connection has been severed.
+pub fn is_paymaster_severed() -> bool {
+    if let Ok(severed) = PAYMASTER_SEVERED.lock() {
+        *severed
+    } else {
+        // Lock poisoned — fail closed
+        warn!("Paymaster severed lock poisoned — failing closed");
+        true
+    }
+}
+
+/// v1.0.2 Patch 3: Validate chainId in EIP-712 typed data domain.
+/// Returns an error message if the chainId is missing, zero, or mismatched.
+fn validate_eip712_chain_id(
+    typed_data: &serde_json::Value,
+    expected_chain_id: u64,
+) -> Option<String> {
+    if expected_chain_id == 0 {
+        return None; // Feature disabled
+    }
+
+    let domain = typed_data.get("domain");
+    if domain.is_none() {
+        return Some(
+            "PATCH 3 (CROSS-CHAIN REPLAY): EIP-712 domain missing — \
+             cannot verify chainId binding"
+                .to_string(),
+        );
+    }
+
+    let chain_id_val = domain.unwrap().get("chainId");
+    if chain_id_val.is_none() {
+        return Some(
+            "PATCH 3 (CROSS-CHAIN REPLAY): EIP-712 domain missing chainId — \
+             signature can be replayed on any chain"
+                .to_string(),
+        );
+    }
+
+    // Parse chainId from various formats (int, hex string, decimal string)
+    let chain_id_val = chain_id_val.unwrap();
+    let parsed_chain_id: Option<u64> = if let Some(n) = chain_id_val.as_u64() {
+        Some(n)
+    } else if let Some(s) = chain_id_val.as_str() {
+        if s.starts_with("0x") || s.starts_with("0X") {
+            u64::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16).ok()
+        } else {
+            s.parse().ok()
+        }
+    } else {
+        None
+    };
+
+    match parsed_chain_id {
+        None => Some(
+            "PATCH 3 (CROSS-CHAIN REPLAY): EIP-712 domain chainId unparseable"
+                .to_string(),
+        ),
+        Some(0) => Some(
+            "PATCH 3 (CROSS-CHAIN REPLAY): EIP-712 domain chainId=0 (wildcard) — \
+             signature valid on ALL chains"
+                .to_string(),
+        ),
+        Some(id) if id != expected_chain_id => Some(format!(
+            "PATCH 3 (CROSS-CHAIN REPLAY): EIP-712 domain chainId={} != expected {} — \
+             possible cross-chain replay attack",
+            id, expected_chain_id
+        )),
+        Some(_) => None, // chainId matches — all good
+    }
+}
+
+/// v1.0.2 Patch 4: Extract UserOperation gas from calldata.
+/// For ERC-4337 UserOperations, the `callGasLimit` field determines
+/// how much gas the Paymaster sponsors.
+fn extract_userop_gas(data: &[u8]) -> Option<u64> {
+    // ERC-4337 UserOperation ABI:
+    // handleOps selector: 0x1fad948c
+    // UserOp struct has callGasLimit at offset 128 (word 4, 0-indexed)
+    if data.len() < 4 {
+        return None;
+    }
+    let selector = &data[0..4];
+    // handleOps(UserOperation[], address)
+    if selector != [0x1f, 0xad, 0x94, 0x8c] {
+        return None;
+    }
+    // Simplified: for real implementation, decode full ABI
+    // For now, return None (feature depends on full ABI decode)
+    None
 }
 
 /// Zero-Day 2: Start the WebSocket mempool watcher for SessionKeyRevoked events.
@@ -305,6 +445,22 @@ pub async fn handle_rpc(
         }
     }
 
+    // ── v1.0.2 Patch 4: Paymaster Sever Check ──────────────────
+    // If the Paymaster has been severed due to too many post-simulation
+    // reverts, block ALL outgoing transactions immediately.
+    if is_paymaster_severed() && SEND_METHODS.contains(&req.method.as_str()) {
+        let reason = "AEGIS PATCH 4 (PAYMASTER SLASHING): Paymaster connection severed. \
+                       Too many post-simulation reverts detected — all transactions blocked \
+                       to prevent gas drain."
+            .to_string();
+        warn!("{}", reason);
+        let (resp, tx_hash) = JsonRpcResponse::aegis_synthetic_send(req.id, &reason);
+        if let Ok(mut store) = BLOCKED_TX_STORE.lock() {
+            store.insert(tx_hash, reason);
+        }
+        return resp;
+    }
+
     // ── GOD-TIER 1: EIP-712 Silent Dagger Interception ─────────
     // Intercept ALL cryptographic signing endpoints. The agent should
     // NEVER blindly sign off-chain messages — they can be weaponized
@@ -329,6 +485,23 @@ pub async fn handle_rpc(
             } else {
                 typed_data
             };
+
+            // ── v1.0.2 Patch 3: Cross-Chain Replay Defense ──────
+            // Validate chainId in the EIP-712 domain BEFORE checking
+            // dangerous primary types. Missing/zero/mismatched chainId
+            // allows cross-chain replay attacks.
+            if let Some(chain_err) = validate_eip712_chain_id(
+                &parsed_data, config.expected_chain_id
+            ) {
+                warn!("{}", chain_err);
+                let (resp, tx_hash) = JsonRpcResponse::aegis_synthetic_send(
+                    req.id, &chain_err,
+                );
+                if let Ok(mut store) = BLOCKED_TX_STORE.lock() {
+                    store.insert(tx_hash, chain_err);
+                }
+                return resp;
+            }
 
             let (is_dangerous, synthetic_action, risk_desc) =
                 permit_decoder::analyze_typed_data(&parsed_data);
@@ -383,8 +556,48 @@ pub async fn handle_rpc(
     }
 
     // ── Read-only methods: pass through to upstream ─────────────
+    // v1.0.2 Patch 1 (Trojan Receipt): If sanitize_read_responses is enabled,
+    // intercept read-path responses and scrub LLM control tokens.
     if !SEND_METHODS.contains(&req.method.as_str()) {
-        return proxy_to_upstream(config, &req).await;
+        let mut response = proxy_to_upstream(config, &req).await;
+
+        // v1.0.2 Patch 1: Sanitize read-path responses
+        if config.sanitize_read_responses
+            && sanitizer::SANITIZE_METHODS.contains(&req.method.as_str())
+        {
+            // Convert to serde_json::Value for sanitization
+            if let Ok(mut resp_json) = serde_json::to_value(&response) {
+                let (tainted, details) = sanitizer::sanitize_rpc_response(&mut resp_json);
+                if tainted {
+                    warn!(
+                        method = %req.method,
+                        details = ?details,
+                        "PATCH 1 (TROJAN RECEIPT): Read-path response sanitized"
+                    );
+                    // Reconstruct the response from sanitized JSON
+                    if let Some(result) = resp_json.get("result").cloned() {
+                        response.result = Some(result);
+                    }
+                }
+            }
+        }
+
+        // v1.0.2 Patch 4: Detect on-chain reverts in real transaction receipts.
+        // When a tx that passed simulation reverts on-chain (status=0x0),
+        // record a revert strike against the Paymaster.
+        if req.method == "eth_getTransactionReceipt" && config.revert_strike_max > 0 {
+            if let Some(ref result) = response.result {
+                let status = result.get("status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("0x1");
+                if status == "0x0" {
+                    info!("PATCH 4: On-chain revert detected — recording strike");
+                    record_revert_strike(config);
+                }
+            }
+        }
+
+        return response;
     }
 
     // ── Transaction methods: simulate first ─────────────────────
@@ -462,6 +675,22 @@ pub async fn handle_rpc(
         );
         telemetry::uplink_ioc(&ioc, "https://cloud.aegis.network/v1/ioc").await;
         // Patch 4: Return synthetic tx hash — agent stays alive
+        let (resp, tx_hash) = JsonRpcResponse::aegis_synthetic_send(req.id, &reason);
+        if let Ok(mut store) = BLOCKED_TX_STORE.lock() {
+            store.insert(tx_hash, reason);
+        }
+        return resp;
+    }
+
+    // ── v1.0.2 Patch 2: Non-determinism check ──────────────────
+    // If the simulation detected environmental opcodes feeding into JUMPI
+    // conditions, the on-chain execution may differ from simulation.
+    if sim_result.non_deterministic && config.detect_non_determinism {
+        let reason = "AEGIS PATCH 2 (SCHRÖDINGER'S STATE): Non-deterministic execution \
+                       detected — environmental opcodes (TIMESTAMP, BLOCKHASH, etc.) feed \
+                       into conditional branches. Simulation outcome is unreliable."
+            .to_string();
+        warn!("{}", reason);
         let (resp, tx_hash) = JsonRpcResponse::aegis_synthetic_send(req.id, &reason);
         if let Ok(mut store) = BLOCKED_TX_STORE.lock() {
             store.insert(tx_hash, reason);

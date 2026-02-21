@@ -38,8 +38,10 @@
 mod config;
 mod fee;
 mod flashbots;
+mod inspector;
 mod router;
 mod rpc;
+mod sanitizer;
 mod simulator;
 mod telemetry;
 mod threat_feed;
