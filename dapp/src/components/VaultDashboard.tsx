@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAccount } from "wagmi";
 import { formatEther, type Address } from "viem";
 import {
@@ -20,9 +20,12 @@ import { DeployVault } from "./DeployVault";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
 
 export function VaultDashboard() {
-  const { address: userAddress, isConnected } = useAccount();
+  const { address: userAddress, isConnected, isReconnecting } = useAccount();
   const [vaultAddress, setVaultAddress] = useState<string>("");
   const [activeVault, setActiveVault] = useState<Address | null>(null);
+  // Prevent hydration flash: wait for client-side mount before deciding connected state
+  const [hasMounted, setHasMounted] = useState(false);
+  useEffect(() => { setHasMounted(true); }, []);
 
   const ownerVaults = useOwnerVaults(userAddress);
 
@@ -36,6 +39,19 @@ export function VaultDashboard() {
     userAddress &&
     owner.data &&
     userAddress.toLowerCase() === (owner.data as string).toLowerCase();
+
+  // While wagmi is still rehydrating the connection, show a loading state
+  // instead of flashing the disconnected view
+  if (!hasMounted || isReconnecting) {
+    return (
+      <div className="text-center py-20">
+        <div className="inline-block w-6 h-6 border-2 border-ink/20 border-t-terracotta rounded-full animate-spin" />
+        <p className="font-mono text-xs text-ink/40 mt-4 uppercase tracking-widest">
+          Reconnecting wallet...
+        </p>
+      </div>
+    );
+  }
 
   if (!isConnected) {
     return (
