@@ -8,6 +8,7 @@
 
 <br>
 
+[![Live Dashboard](https://img.shields.io/badge/Live-plimsoll.network-C84B31.svg?style=flat-square)](https://plimsoll.network)
 [![License: MIT](https://img.shields.io/badge/License-MIT-1A1918.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/Tests-836_passing-1A1918.svg?style=flat-square)]()
 [![Rust](https://img.shields.io/badge/Rust-Blazing_Fast-C84B31.svg?style=flat-square)]()
@@ -614,5 +615,6 @@ We welcome contributors. The codebase is 836 tests deep — it's hard to break.
 ---
 
 <p align="center">
-  <strong>Stop babysitting your agents. Let them drive.</strong>
+  <strong>Stop babysitting your agents. Let them drive.</strong><br>
+  <a href="https://plimsoll.network">plimsoll.network</a> · <a href="https://plimsoll.network/dashboard">Dashboard</a> · <a href="https://github.com/scoootscooob/plimsoll-protocol">GitHub</a>
 </p>
