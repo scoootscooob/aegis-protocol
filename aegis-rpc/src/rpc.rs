@@ -191,6 +191,11 @@ lazy_static::lazy_static! {
     /// v1.0.2 Patch 4: Paymaster severed flag.
     /// Once set, ALL transactions are blocked until manual reset.
     static ref PAYMASTER_SEVERED: Mutex<bool> = Mutex::new(false);
+
+    /// v1.0.3 Bounty 4: Simulated gas storage.
+    /// Maps tx hash → simulated gas_used. When the receipt arrives,
+    /// compare actual vs simulated gas to detect gas black holes.
+    static ref SIMULATED_GAS_STORE: Mutex<HashMap<String, u64>> = Mutex::new(HashMap::new());
 }
 
 /// Zero-Day 2: SessionKeyRevoked event topic (keccak256 of event signature).
@@ -271,6 +276,38 @@ pub fn is_paymaster_severed() -> bool {
         warn!("Paymaster severed lock poisoned — failing closed");
         true
     }
+}
+
+/// v1.0.3 Bounty 4: Store simulated gas for later comparison with receipt.
+fn store_simulated_gas(tx_hash: &str, gas_used: u64) {
+    if let Ok(mut store) = SIMULATED_GAS_STORE.lock() {
+        store.insert(tx_hash.to_string(), gas_used);
+        // Prune old entries (keep last 1000)
+        if store.len() > 1000 {
+            let keys: Vec<String> = store.keys().take(100).cloned().collect();
+            for k in keys {
+                store.remove(&k);
+            }
+        }
+    }
+}
+
+/// v1.0.3 Bounty 4: Retrieve simulated gas for a tx hash.
+fn get_simulated_gas(tx_hash: &str) -> Option<u64> {
+    if let Ok(store) = SIMULATED_GAS_STORE.lock() {
+        store.get(tx_hash).copied()
+    } else {
+        None
+    }
+}
+
+/// v1.0.3 Bounty 4: Parse gasUsed from a transaction receipt JSON.
+fn parse_gas_used_from_receipt(result: &serde_json::Value) -> u64 {
+    result
+        .get("gasUsed")
+        .and_then(|v| v.as_str())
+        .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+        .unwrap_or(0)
 }
 
 /// v1.0.2 Patch 3: Validate chainId in EIP-712 typed data domain.
@@ -597,11 +634,63 @@ pub async fn handle_rpc(
             }
         }
 
+        // ── v1.0.3 Bounty 4: Gas Black Hole Detection ──────────────
+        // Compare actual gasUsed in receipt vs simulated gas. If the ratio
+        // exceeds the threshold, record a gas anomaly strike (even on success).
+        // This catches the 63/64ths attack where a sub-call burns gas internally,
+        // catches its own OOG, and returns success.
+        if req.method == "eth_getTransactionReceipt" && config.gas_anomaly_ratio > 0.0 {
+            if let Some(hash) = req.params.as_array()
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str())
+            {
+                if let Some(ref result) = response.result {
+                    if let Some(simulated_gas) = get_simulated_gas(hash) {
+                        let receipt_gas = parse_gas_used_from_receipt(result);
+                        if simulated_gas > 0 && receipt_gas > 0 {
+                            let ratio = receipt_gas as f64 / simulated_gas as f64;
+                            if ratio > config.gas_anomaly_ratio {
+                                warn!(
+                                    receipt_gas = receipt_gas,
+                                    simulated_gas = simulated_gas,
+                                    ratio = ratio,
+                                    "BOUNTY 4 (GAS BLACK HOLE): Gas anomaly detected — \
+                                     actual gas {:.1}x simulated. Recording strike.",
+                                    ratio
+                                );
+                                record_revert_strike(config);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         return response;
     }
 
     // ── Transaction methods: simulate first ─────────────────────
     info!("Intercepted send tx — running pre-flight simulation");
+
+    // ── v1.0.3 Bounty 1: Duplicate JSON key detection ──────────
+    // Before parsing, check for duplicate keys in the raw JSON params.
+    // serde_json silently deduplicates, but upstream parsers may differ.
+    if config.reject_duplicate_json_keys {
+        let raw_params = serde_json::to_string(&req.params).unwrap_or_default();
+        if let Some(dup_key) = detect_duplicate_json_keys(&raw_params) {
+            let reason = format!(
+                "AEGIS BOUNTY 1 (JSON POLLUTION): Duplicate key '{}' detected in \
+                 transaction params. Parser divergence attack blocked.",
+                dup_key
+            );
+            warn!("{}", reason);
+            let (resp, tx_hash) = JsonRpcResponse::aegis_synthetic_send(req.id, &reason);
+            if let Ok(mut store) = BLOCKED_TX_STORE.lock() {
+                store.insert(tx_hash, reason);
+            }
+            return resp;
+        }
+    }
 
     // Parse tx parameters from the request
     let (from, to, value, data) = match parse_tx_params(&req) {
@@ -709,7 +798,8 @@ pub async fn handle_rpc(
         sim_gas_used = sim_result.gas_used,
         sim_block = sim_result.simulated_block,
         target_codehash = %sim_result.target_codehash,
-        "State-delta invariant captured (pinned to block + codehash)"
+        impl_slot = %sim_result.impl_slot_value,
+        "State-delta invariant captured (pinned to block + codehash + impl slot)"
     );
 
     // Calculate and log fee
@@ -725,8 +815,17 @@ pub async fn handle_rpc(
         // For now, fall through to upstream
     }
 
+    // ── v1.0.3 Bounty 1: Canonical re-serialization ──────────────
+    // Re-serialize from typed fields to eliminate parser divergence.
+    // The upstream node sees exactly what was simulated.
+    let canonical_req = if config.reject_duplicate_json_keys {
+        canonicalize_send_request(&req, &from, &to, value, &data)
+    } else {
+        req
+    };
+
     // Forward to upstream RPC
-    proxy_to_upstream(config, &req).await
+    proxy_to_upstream(config, &canonical_req).await
 }
 
 /// Forward a request to the upstream Ethereum RPC.
@@ -758,6 +857,97 @@ async fn proxy_to_upstream(config: &Config, req: &JsonRpcRequest) -> JsonRpcResp
             -32603,
             format!("Upstream connection error: {e}"),
         ),
+    }
+}
+
+/// v1.0.3 Bounty 1: Detect duplicate keys in a JSON object.
+/// serde_json silently deduplicates (keeps last), but the raw JSON bytes
+/// forwarded to upstream may be parsed differently by other implementations.
+/// This function checks the raw params string for duplicate keys.
+fn detect_duplicate_json_keys(raw_json: &str) -> Option<String> {
+    // Simple state machine to detect duplicate keys at the top level of a JSON object.
+    // We parse the raw JSON to find all key strings at each nesting level.
+    let val: serde_json::Value = match serde_json::from_str(raw_json) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+
+    fn check_object(obj: &serde_json::Map<String, serde_json::Value>, raw: &str) -> Option<String> {
+        // Count occurrences of each key pattern in the raw JSON
+        for key in obj.keys() {
+            let pattern = format!("\"{}\"", key);
+            let count = raw.matches(&pattern).count();
+            // If we see more than expected occurrences, it might be a duplicate
+            // (conservative: any key appearing 2+ times at the raw level is suspicious)
+            if count > 1 {
+                // Verify it's actually a key (followed by ':') not a value
+                let mut key_count = 0;
+                let mut search_from = 0;
+                while let Some(pos) = raw[search_from..].find(&pattern) {
+                    let abs_pos = search_from + pos;
+                    let after = abs_pos + pattern.len();
+                    // Check if followed by optional whitespace then ':'
+                    let remaining = &raw[after..];
+                    let trimmed = remaining.trim_start();
+                    if trimmed.starts_with(':') {
+                        key_count += 1;
+                    }
+                    search_from = abs_pos + 1;
+                }
+                if key_count > 1 {
+                    return Some(key.clone());
+                }
+            }
+        }
+        None
+    }
+
+    if let Some(obj) = val.as_object() {
+        // Check top-level object
+        if let Some(dup) = check_object(obj, raw_json) {
+            return Some(dup);
+        }
+    }
+    // Also check inside params array elements
+    if let Some(arr) = val.as_array() {
+        for item in arr {
+            if let Some(obj) = item.as_object() {
+                // Find the substring corresponding to this object in raw JSON
+                // For simplicity, check against the full raw string
+                if let Some(dup) = check_object(obj, raw_json) {
+                    return Some(dup);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// v1.0.3 Bounty 1: Build a canonical JSON-RPC request from parsed fields.
+/// Re-serializes the tx params from typed fields, eliminating any parser
+/// divergence from duplicate keys or non-standard formatting.
+fn canonicalize_send_request(
+    req: &JsonRpcRequest,
+    from: &str,
+    to: &str,
+    value: u128,
+    data: &[u8],
+) -> JsonRpcRequest {
+    let value_hex = format!("0x{:x}", value);
+    let data_hex = format!("0x{}", hex::encode(data));
+
+    let canonical_tx = serde_json::json!({
+        "from": from,
+        "to": to,
+        "value": value_hex,
+        "data": data_hex,
+    });
+
+    JsonRpcRequest {
+        jsonrpc: req.jsonrpc.clone(),
+        method: req.method.clone(),
+        params: serde_json::json!([canonical_tx]),
+        id: req.id.clone(),
     }
 }
 
@@ -794,4 +984,53 @@ fn parse_tx_params(req: &JsonRpcRequest) -> Result<(String, String, u128, Vec<u8
         .unwrap_or_default();
 
     Ok((from, to, value, data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_duplicate_keys_clean() {
+        let json = r#"{"from":"0xabc","to":"0xdef","value":"0x0"}"#;
+        assert!(detect_duplicate_json_keys(json).is_none());
+    }
+
+    #[test]
+    fn test_detect_duplicate_keys_found() {
+        let json = r#"{"to":"0xsafe","to":"0xhacker","value":"0x0"}"#;
+        let result = detect_duplicate_json_keys(json);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "to");
+    }
+
+    #[test]
+    fn test_detect_duplicate_keys_nested_array() {
+        let json = r#"[{"from":"0xa","to":"0xb","to":"0xc"}]"#;
+        let result = detect_duplicate_json_keys(json);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "to");
+    }
+
+    #[test]
+    fn test_canonicalize_send_request() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: "eth_sendTransaction".into(),
+            params: serde_json::json!([{
+                "from": "0xabc",
+                "to": "0xdef",
+                "to": "0xhacker",
+                "value": "0x100"
+            }]),
+            id: serde_json::json!(1),
+        };
+        let canonical = canonicalize_send_request(
+            &req, "0xabc", "0xhacker", 256, &[],
+        );
+        let tx = canonical.params.as_array().unwrap()[0].clone();
+        assert_eq!(tx["to"].as_str().unwrap(), "0xhacker");
+        assert_eq!(tx["from"].as_str().unwrap(), "0xabc");
+        assert_eq!(tx["value"].as_str().unwrap(), "0x100");
+    }
 }

@@ -55,6 +55,10 @@ contract AegisVault {
     // 3 blocks ≈ 36 seconds on Ethereum L1 (12s/block).
     uint256 public constant MAX_BLOCK_DRIFT = 3;
 
+    // ── v1.0.3 Bounty 2: EIP-1967 Implementation Slot ──────────────
+    // bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)
+    bytes32 public constant EIP1967_IMPL_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+
     // ── Patch 1: TEE Co-Signing ──────────────────────────────────
     // Prevents RPC bypass attacks. Session key alone is NOT enough —
     // the Aegis TEE enclave must co-sign every transaction.
@@ -89,6 +93,8 @@ contract AegisVault {
     event PaymasterDefenseUpdated(uint256 maxGas, uint256 maxStrikes);
     event PaymasterRevertStrike(address indexed agent, uint256 strikeCount);
     event PaymasterAutoRevoked(address indexed agent, string reason);
+    event GasAnomalyDetected(address indexed agent, uint256 gasConsumed, uint256 gasForwarded);
+    event ProxyUpgradeBlocked(address indexed target, bytes32 simulatedImpl, bytes32 currentImpl);
 
     // ── Modifiers ───────────────────────────────────────────────
 
@@ -279,6 +285,7 @@ contract AegisVault {
         uint256 deadline,
         uint256 simulatedBlock,
         bytes32 simulatedCodehash,
+        bytes32 simulatedImplSlot,
         uint8 v, bytes32 r, bytes32 s
     ) external onlyActiveSession notLocked returns (bytes memory) {
         require(block.timestamp <= deadline, "AegisVault: cosign expired");
@@ -314,8 +321,36 @@ contract AegisVault {
             );
         }
 
+        // ── v1.0.3 Bounty 2: EIP-1967 Proxy Implementation Pinning ──
+        // For transparent proxies, EXTCODEHASH is constant across upgrades.
+        // We verify the implementation storage slot hasn't changed since simulation.
+        // bytes32(0) = skip check (non-proxy targets or backward compat).
+        if (simulatedImplSlot != bytes32(0)) {
+            // Read the EIP-1967 implementation slot from the target contract
+            bytes32 currentImplSlot;
+            bytes32 slot = EIP1967_IMPL_SLOT;
+            // We cannot directly read another contract's storage from Solidity,
+            // so we call a standard proxy interface. However, for maximum
+            // compatibility, we include it in the cosign digest — if the
+            // implementation changed, the RPC proxy will produce a different
+            // digest on the next attempt, invalidating the old signature.
+            // For on-chain enforcement, we attempt a staticcall to implementation()
+            (bool implOk, bytes memory implData) = target.staticcall(
+                abi.encodeWithSignature("implementation()")
+            );
+            if (implOk && implData.length >= 32) {
+                currentImplSlot = bytes32(implData);
+                if (currentImplSlot != simulatedImplSlot) {
+                    emit ProxyUpgradeBlocked(target, simulatedImplSlot, currentImplSlot);
+                    revert("AegisVault: PROXY UPGRADE - implementation changed since simulation");
+                }
+            }
+            // If staticcall fails, fall through — the cosign digest mismatch
+            // provides a secondary defense layer
+        }
+
         // Reconstruct the digest the TEE enclave signed
-        // (includes simulatedBlock + simulatedCodehash for full pinning)
+        // (includes simulatedBlock + simulatedCodehash + simulatedImplSlot for full pinning)
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19Ethereum Signed Message:\n32",
             keccak256(abi.encode(
@@ -327,6 +362,7 @@ contract AegisVault {
                 deadline,
                 simulatedBlock,     // GOD-TIER 3: temporal binding
                 simulatedCodehash,  // ZERO-DAY 2: bytecode binding
+                simulatedImplSlot,  // BOUNTY 2: proxy implementation binding
                 block.chainid,
                 address(this)       // vault address
             ))
@@ -411,7 +447,33 @@ contract AegisVault {
         // ── All physics passed — execute ────────────────────────
         sk.spentToday += value;
 
+        // v1.0.3 Bounty 4: Measure gas before and after call for anomaly detection
+        uint256 gasBefore = gasleft();
         (bool success, bytes memory result) = target.call{value: value}(data);
+        uint256 gasConsumed = gasBefore - gasleft();
+
+        // ── v1.0.3 Bounty 4: Gas Black Hole Detection ────────────
+        // The 63/64ths EIP-150 rule allows a malicious contract to:
+        // 1. Receive 63/64 of forwarded gas
+        // 2. Burn it in a tight loop
+        // 3. Catch its own OOG in a try/catch
+        // 4. Return success with empty data
+        // If the call consumed > 90% of forwarded gas but returned success,
+        // it's likely a gas-burning attack. Emit an event for off-chain tracking.
+        if (success && maxUserOpGas > 0) {
+            if (gasConsumed > (gasBefore * 9) / 10) {
+                emit GasAnomalyDetected(agent, gasConsumed, gasBefore);
+                // Track as a revert strike — gas drain is equivalent to revert drain
+                if (maxRevertStrikes > 0) {
+                    revertCount[agent] += 1;
+                    emit PaymasterRevertStrike(agent, revertCount[agent]);
+                    if (revertCount[agent] >= maxRevertStrikes) {
+                        _revokeKey(agent, "GAS BLACK HOLE: excessive gas consumption");
+                        emit PaymasterAutoRevoked(agent, "gas anomaly strike limit exceeded");
+                    }
+                }
+            }
+        }
 
         // ── ZERO-DAY 4 (v1.0.2): Revert Strike Tracking ─────────
         // If execution reverts and maxRevertStrikes is set, track revert

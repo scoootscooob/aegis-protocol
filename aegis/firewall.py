@@ -77,6 +77,18 @@ class AegisConfig:
     revert_strike_window_secs: float = 300.0  # 5-minute rolling window
     on_paymaster_sever: Callable[[], None] | None = None  # Webhook callback
 
+    # ── v1.0.3 Bounty 3: L1 Blob-Fee Asymmetry ──────────────────
+    # Chain ID for L2-aware TVAR computation. On L2 rollups, TVAR
+    # includes L1 data posting cost to prevent calldata-padding attacks.
+    # 0 = unknown/skip L1 fee, 1 = L1 mainnet (no L1 fee).
+    chain_id: int = 0
+
+    # ── v1.0.3 Bounty 4: Gas Black Hole Defense ─────────────────
+    # Gas anomaly ratio threshold. If actual gas / simulated gas > ratio,
+    # record a gas anomaly strike (reuses Paymaster sever mechanism).
+    # 0.0 = disabled.
+    gas_anomaly_ratio: float = 0.0
+
 
 @dataclass
 class AegisFirewall:
@@ -359,6 +371,44 @@ class AegisFirewall:
                     logger.exception(
                         "ZERO-DAY 4 (v1.0.2): on_paymaster_sever callback failed"
                     )
+
+    # ── Gas anomaly tracking (v1.0.3 Bounty 4) ─────────────────
+
+    def record_gas_anomaly(self, actual_gas: int, simulated_gas: int) -> None:
+        """Record a gas anomaly — actual gas significantly exceeded simulated gas.
+
+        v1.0.3 Bounty 4 (Gas Black Hole): The 63/64ths EIP-150 rule allows
+        a malicious contract to burn gas internally, catch its own OOG, and
+        return success. This bypasses the revert strike system because the
+        parent call returns ``success=True``.
+
+        This method detects the attack by comparing actual vs simulated gas.
+        If the ratio exceeds ``gas_anomaly_ratio``, it records a strike using
+        the same paymaster sever mechanism as ``record_revert()``.
+
+        Parameters
+        ----------
+        actual_gas : int
+            Gas consumed on-chain (from receipt.gasUsed).
+        simulated_gas : int
+            Gas consumed in simulation.
+        """
+        if self.config.gas_anomaly_ratio <= 0.0:
+            return  # Feature disabled
+
+        if simulated_gas <= 0:
+            return  # No simulation data to compare
+
+        ratio = actual_gas / simulated_gas
+        if ratio > self.config.gas_anomaly_ratio:
+            logger.warning(
+                "v1.0.3 BOUNTY 4 (GAS BLACK HOLE): Gas anomaly detected — "
+                "actual=%d, simulated=%d, ratio=%.1f (threshold=%.1f). "
+                "Recording strike.",
+                actual_gas, simulated_gas, ratio, self.config.gas_anomaly_ratio,
+            )
+            # Reuse the paymaster sever mechanism
+            self.record_revert()
 
     # ── TEE enclave ──────────────────────────────────────────────
 

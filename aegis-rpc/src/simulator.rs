@@ -76,6 +76,24 @@ pub async fn simulate_transaction(
         );
     }
 
+    // ── v1.0.3 Bounty 2: Fetch EIP-1967 implementation slot ─────
+    // For transparent proxies, EXTCODEHASH never changes on upgrade —
+    // only the implementation address in storage slot changes. We pin
+    // the implementation slot value alongside the codehash.
+    let impl_slot_value = if config.check_proxy_impl_slot && !target_codehash.is_empty() {
+        fetch_implementation_slot(&config.upstream_rpc_url, to).await
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    if !impl_slot_value.is_empty() {
+        info!(
+            target = to,
+            impl_slot = %impl_slot_value,
+            "BOUNTY 2: EIP-1967 implementation slot pinned"
+        );
+    }
+
     // ── Step 1: Fetch account state from upstream RPC ──────────
     let sender_balance = fetch_balance(&config.upstream_rpc_url, from).await
         .unwrap_or(U256::from(0));
@@ -126,7 +144,7 @@ pub async fn simulate_transaction(
             tx.gas_price = U256::from(20_000_000_000u64); // 20 gwei
         })
         .modify_cfg_env(|cfg| {
-            cfg.chain_id = 1; // mainnet for simulation
+            cfg.chain_id = config.chain_id; // v1.0.3 Bounty 3: use configured chain ID
         })
         .build();
 
@@ -160,6 +178,7 @@ pub async fn simulate_transaction(
             simulated_block,
             target_codehash: target_codehash.clone(),
             non_deterministic: false,
+            impl_slot_value: impl_slot_value.clone(),
         });
     }
 
@@ -211,6 +230,7 @@ pub async fn simulate_transaction(
                 simulated_block,
                 target_codehash: target_codehash.clone(),
                 non_deterministic: false,
+                impl_slot_value: impl_slot_value.clone(),
             };
 
             info!(
@@ -235,6 +255,7 @@ pub async fn simulate_transaction(
                 simulated_block,
                 target_codehash: target_codehash.clone(),
                 non_deterministic: false,
+                impl_slot_value: impl_slot_value.clone(),
             })
         }
     }
@@ -342,6 +363,47 @@ async fn fetch_extcodehash(rpc_url: &str, address: &str) -> Result<String> {
     use alloy_primitives::keccak256;
     let hash = keccak256(&code_bytes);
     Ok(format!("0x{}", hex::encode(hash.as_slice())))
+}
+
+/// v1.0.3 Bounty 2 (Proxy Illusion): EIP-1967 implementation storage slot.
+/// `bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1)`
+const EIP1967_IMPL_SLOT: &str =
+    "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+
+/// v1.0.3 Bounty 2: Fetch the EIP-1967 implementation storage slot value.
+/// For transparent/UUPS proxies, this slot holds the implementation address.
+/// Returns the bytes32 value (as hex string), or empty if the slot is zero
+/// (indicating the target is not an EIP-1967 proxy).
+async fn fetch_implementation_slot(rpc_url: &str, address: &str) -> Result<String> {
+    let client = reqwest::Client::new();
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getStorageAt",
+        "params": [address, EIP1967_IMPL_SLOT, "latest"],
+        "id": 1
+    });
+
+    let resp = client
+        .post(rpc_url)
+        .json(&payload)
+        .send()
+        .await
+        .context("Failed to fetch EIP-1967 implementation slot")?;
+
+    let body: serde_json::Value = resp.json().await
+        .context("Failed to parse storage response")?;
+
+    let slot_value = body["result"]
+        .as_str()
+        .unwrap_or("0x0000000000000000000000000000000000000000000000000000000000000000");
+
+    // If the slot is all zeros, this is not a proxy
+    let trimmed = slot_value.trim_start_matches("0x");
+    if trimmed.chars().all(|c| c == '0') {
+        return Ok(String::new());
+    }
+
+    Ok(slot_value.to_string())
 }
 
 /// Detect ERC-20 Approval events in execution logs.

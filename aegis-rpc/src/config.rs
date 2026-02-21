@@ -70,6 +70,25 @@ pub struct Config {
 
     /// Patch 4 (Paymaster Slashing): Rolling window in seconds for revert strikes.
     pub revert_strike_window_secs: u64,
+
+    // ── v1.0.3: Bounty Patch Configuration ──────────────────────────
+
+    /// Bounty 1 (JSON Pollution): Reject JSON-RPC requests with duplicate
+    /// keys in transaction objects to prevent parser divergence attacks.
+    pub reject_duplicate_json_keys: bool,
+
+    /// Bounty 2 (Proxy Illusion): Check EIP-1967 implementation storage slot
+    /// to detect proxy upgrades between simulation and execution.
+    pub check_proxy_impl_slot: bool,
+
+    /// Bounty 3 (L1 Data Fee): Chain ID for L2-aware TVAR computation.
+    /// On L2 rollups, TVAR includes L1 data posting cost.
+    pub chain_id: u64,
+
+    /// Bounty 4 (Gas Black Hole): Gas anomaly ratio threshold.
+    /// If receipt.gasUsed / simulated.gasUsed > this ratio, record a strike.
+    /// 0.0 = disabled.
+    pub gas_anomaly_ratio: f64,
 }
 
 impl Config {
@@ -142,6 +161,22 @@ impl Config {
                 .unwrap_or_else(|_| "300".into())
                 .parse()
                 .unwrap_or(300),
+            reject_duplicate_json_keys: std::env::var("AEGIS_REJECT_DUPLICATE_KEYS")
+                .unwrap_or_else(|_| "false".into())
+                .parse()
+                .unwrap_or(false),
+            check_proxy_impl_slot: std::env::var("AEGIS_CHECK_PROXY_IMPL")
+                .unwrap_or_else(|_| "false".into())
+                .parse()
+                .unwrap_or(false),
+            chain_id: std::env::var("AEGIS_CHAIN_ID")
+                .unwrap_or_else(|_| "1".into())
+                .parse()
+                .unwrap_or(1),
+            gas_anomaly_ratio: std::env::var("AEGIS_GAS_ANOMALY_RATIO")
+                .unwrap_or_else(|_| "0.0".into())
+                .parse()
+                .unwrap_or(0.0),
         })
     }
 }

@@ -54,6 +54,10 @@ pub struct SimulationResult {
     /// conditional branches (JUMPI). If true, the simulation outcome may
     /// differ from on-chain execution.
     pub non_deterministic: bool,
+    /// v1.0.3 Bounty 2 (Proxy Illusion): EIP-1967 implementation storage slot
+    /// value at simulation time. For transparent proxies, EXTCODEHASH stays
+    /// constant across upgrades — only this slot changes. Empty = not a proxy.
+    pub impl_slot_value: String,
 }
 
 impl JsonRpcResponse {

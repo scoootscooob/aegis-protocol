@@ -210,7 +210,9 @@ class KeyVault:
             # This catches EIP-1559 gas drain attacks where value=0
             # but maxPriorityFeePerGas is absurdly high.
             if spend_amount <= 0:
-                spend_amount = _compute_tvar(tx_dict)
+                # v1.0.3 Bounty 3: Pass chain_id for L2-aware TVAR
+                fw_chain_id = getattr(self._firewall.config, "chain_id", 0)
+                spend_amount = _compute_tvar(tx_dict, chain_id=fw_chain_id)
 
             # Build Aegis payload from the Ethereum tx dict
             payload = _tx_dict_to_aegis_payload(tx_dict)
@@ -411,10 +413,77 @@ class KeyVault:
             del self._secrets[key_id]
 
 
+# ── v1.0.3 Bounty 3: L2 Chain ID Registry ────────────────────────────
+
+L2_CHAIN_IDS: dict[int, str] = {
+    10: "Optimism",
+    8453: "Base",
+    42161: "Arbitrum One",
+    42170: "Arbitrum Nova",
+    324: "zkSync Era",
+    1101: "Polygon zkEVM",
+    534352: "Scroll",
+    59144: "Linea",
+    7777777: "Zora",
+}
+
+
+def _compute_l1_data_fee(tx_dict: dict[str, Any], chain_id: int) -> float:
+    """Estimate L1 data posting fee for L2 rollups.
+
+    v1.0.3 Bounty 3 (L1 Blob-Fee Asymmetry): On Optimism/Base/Arbitrum,
+    every L2 transaction pays an L1 data posting fee proportional to
+    calldata size:
+
+        l1_fee = (zero_bytes * 4 + nonzero_bytes * 16) * l1_base_fee
+
+    An attacker can pad calldata with junk bytes (nearly free on L2 execution)
+    to inflate the L1 posting fee, draining the treasury via Paymaster.
+
+    We use a conservative default L1 base fee (30 gwei) since the actual
+    value comes from the L2's L1 oracle contract (e.g., OVM_GasPriceOracle).
+
+    Parameters
+    ----------
+    tx_dict : dict
+        Ethereum transaction dictionary.
+    chain_id : int
+        Chain ID (L2 chains trigger L1 fee calculation).
+
+    Returns
+    -------
+    float
+        Estimated L1 data fee in Wei (0.0 if not an L2 chain).
+    """
+    if chain_id not in L2_CHAIN_IDS:
+        return 0.0
+
+    data_hex = tx_dict.get("data", "") or tx_dict.get("input", "")
+    if isinstance(data_hex, str):
+        data_hex = data_hex.replace("0x", "")
+    else:
+        data_hex = ""
+
+    try:
+        data_bytes = bytes.fromhex(data_hex) if data_hex else b""
+    except ValueError:
+        data_bytes = b""
+
+    zero_bytes = sum(1 for b in data_bytes if b == 0)
+    nonzero_bytes = len(data_bytes) - zero_bytes
+
+    # Conservative L1 base fee estimate (30 gwei = 30e9 wei)
+    # In production, this would come from the L2's L1 oracle contract
+    l1_base_fee = tx_dict.get("_l1BaseFee", 30_000_000_000)
+
+    l1_data_gas = zero_bytes * 4 + nonzero_bytes * 16
+    return float(l1_data_gas * l1_base_fee)
+
+
 # ── TVAR Computation (Flaw 2: EIP-1559 Gas Drain) ────────────────────
 
 
-def _compute_tvar(tx_dict: dict[str, Any]) -> float:
+def _compute_tvar(tx_dict: dict[str, Any], chain_id: int = 0) -> float:
     """Compute Total Value at Risk for an Ethereum transaction.
 
     TVAR = transfer value + (gas limit * max fee per gas)
@@ -435,7 +504,11 @@ def _compute_tvar(tx_dict: dict[str, Any]) -> float:
         max_fee_per_gas = tx_dict.get("gasPrice", 0)
 
     max_gas_cost = gas * max_fee_per_gas
-    return float(value + max_gas_cost)
+
+    # v1.0.3 Bounty 3: Include L1 data posting fee for L2 rollups
+    l1_fee = _compute_l1_data_fee(tx_dict, chain_id)
+
+    return float(value + max_gas_cost + l1_fee)
 
 
 def _tx_dict_to_aegis_payload(tx_dict: dict[str, Any]) -> dict[str, Any]:
