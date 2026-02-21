@@ -125,6 +125,29 @@ export function Header() {
                         >
                           Disconnect
                         </button>
+                        <button
+                          onClick={() => {
+                            setMenuOpen(false);
+                            disconnect();
+                            // Clear stale WalletConnect sessions from localStorage
+                            try {
+                              Object.keys(localStorage).forEach((key) => {
+                                if (
+                                  key.startsWith("wc@") ||
+                                  key.startsWith("walletconnect") ||
+                                  key.startsWith("-walletlink") ||
+                                  key.includes("wagmi")
+                                ) {
+                                  localStorage.removeItem(key);
+                                }
+                              });
+                            } catch {}
+                            window.location.reload();
+                          }}
+                          className="w-full text-left px-3 py-2 font-mono text-xs uppercase tracking-widest text-ink/40 hover:text-ink/70 hover:bg-surface transition-colors border-t border-ink/10 mt-1 pt-2"
+                        >
+                          Reset Connection
+                        </button>
                       </div>
                     </div>
                   )}
