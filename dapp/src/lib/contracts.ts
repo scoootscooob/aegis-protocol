@@ -348,6 +348,6 @@ export const CONTRACTS = {
     whitelistModule: "0x0000000000000000000000000000000000000000" as `0x${string}`,
     drawdownModule: "0x0000000000000000000000000000000000000000" as `0x${string}`,
     attestation: "0x0000000000000000000000000000000000000000" as `0x${string}`,
-    factory: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+    factory: "0xDFa69bef9D9eCe69773C854999C01abD03744185" as `0x${string}`,
   },
 } as const;
