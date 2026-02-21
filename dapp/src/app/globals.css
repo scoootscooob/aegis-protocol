@@ -2,65 +2,64 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --foreground-rgb: 255, 255, 255;
-  --background-start-rgb: 10, 10, 25;
-  --background-end-rgb: 5, 5, 15;
-}
+/*
+ * Plimsoll Design System — Academic Brutalism
+ * No gradients. No drop shadows. No rounded corners.
+ * Paper background. Ink text. Terracotta for BLOCK only.
+ */
 
 body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      rgb(var(--background-start-rgb)),
-      rgb(var(--background-end-rgb))
-    );
+  color: #1A1918;
+  background: #FAF9F6;
   min-height: 100vh;
 }
 
 @layer components {
   .card {
-    @apply bg-gray-900/50 border border-gray-700/50 rounded-xl p-6 backdrop-blur-sm;
+    @apply bg-paper border border-ink/20 p-6;
   }
   .card-hover {
-    @apply card hover:border-plimsoll-500/50 transition-colors duration-200;
+    @apply card hover:border-ink/40 transition-colors duration-200;
   }
   .btn-primary {
-    @apply bg-plimsoll-600 hover:bg-plimsoll-700 text-white font-medium px-4 py-2 rounded-lg
-           transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-ink hover:bg-ink/80 text-paper font-mono text-sm px-4 py-2
+           transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed
+           uppercase tracking-wider;
   }
   .btn-danger {
-    @apply bg-red-600 hover:bg-red-700 text-white font-medium px-4 py-2 rounded-lg
-           transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-terracotta hover:bg-terracotta/80 text-paper font-mono text-sm px-4 py-2
+           transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed
+           uppercase tracking-wider;
   }
   .btn-secondary {
-    @apply bg-gray-700 hover:bg-gray-600 text-white font-medium px-4 py-2 rounded-lg
-           transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-surface hover:bg-ink/10 text-ink border border-ink/30 font-mono text-sm px-4 py-2
+           transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed
+           uppercase tracking-wider;
   }
   .input-field {
-    @apply bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white
-           focus:outline-none focus:ring-2 focus:ring-plimsoll-500 focus:border-transparent
-           placeholder-gray-400 w-full;
+    @apply bg-paper border border-ink/30 px-3 py-2 text-ink
+           focus:outline-none focus:ring-1 focus:ring-ink focus:border-ink
+           placeholder-ink/40 w-full font-mono;
   }
   .label-text {
-    @apply text-sm font-medium text-gray-300 mb-1 block;
+    @apply text-sm font-mono text-ink/70 mb-1 block uppercase tracking-wider;
   }
   .stat-value {
-    @apply text-2xl font-bold text-white;
+    @apply text-2xl font-mono font-bold text-ink;
   }
   .stat-label {
-    @apply text-sm text-gray-400;
+    @apply text-sm font-mono text-ink/60 uppercase tracking-wider;
   }
   .badge-active {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-           bg-green-900/50 text-green-400 border border-green-500/30;
+    @apply inline-flex items-center px-2.5 py-0.5 text-xs font-mono
+           bg-paper text-ink border border-ink/40 uppercase tracking-wider;
   }
   .badge-inactive {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-           bg-red-900/50 text-red-400 border border-red-500/30;
+    @apply inline-flex items-center px-2.5 py-0.5 text-xs font-mono
+           bg-surface text-ink/50 border border-ink/20 uppercase tracking-wider;
   }
   .badge-locked {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-           bg-yellow-900/50 text-yellow-400 border border-yellow-500/30;
+    @apply inline-flex items-center px-2.5 py-0.5 text-xs font-mono
+           bg-terracotta/10 text-terracotta border border-terracotta/40 uppercase tracking-wider;
   }
 }

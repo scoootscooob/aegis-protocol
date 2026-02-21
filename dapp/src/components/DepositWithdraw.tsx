@@ -18,11 +18,11 @@ export function DepositWithdraw({ vaultAddress }: Props) {
 
   return (
     <div className="card">
-      <h3 className="text-lg font-semibold mb-4">Deposit / Withdraw</h3>
+      <h3 className="font-mono text-xs text-ink/60 mb-4 tracking-widest uppercase">Deposit / Withdraw</h3>
 
       {/* Deposit */}
       <div className="space-y-3 mb-6">
-        <h4 className="text-sm font-medium text-plimsoll-400">Deposit ETH</h4>
+        <h4 className="font-mono text-xs text-terracotta tracking-widest uppercase">[ Deposit_ETH ]</h4>
         <div className="flex gap-2">
           <input
             type="number"
@@ -51,24 +51,24 @@ export function DepositWithdraw({ vaultAddress }: Props) {
           </button>
         </div>
         {depositHook.isSuccess && (
-          <p className="text-sm text-green-400">Deposit confirmed!</p>
+          <p className="font-mono text-sm text-ink/60">Deposit confirmed.</p>
         )}
         {depositHook.error && (
-          <p className="text-sm text-red-400">
+          <p className="font-mono text-sm text-terracotta">
             {(depositHook.error as Error).message?.slice(0, 100)}
           </p>
         )}
       </div>
 
       {/* Withdraw */}
-      <div className="space-y-3">
-        <h4 className="text-sm font-medium text-plimsoll-400">Withdraw ETH</h4>
+      <div className="space-y-3 border-t border-ink/20 pt-4">
+        <h4 className="font-mono text-xs text-terracotta tracking-widest uppercase">[ Withdraw_ETH ]</h4>
         <input
           type="text"
           value={withdrawTo}
           onChange={(e) => setWithdrawTo(e.target.value)}
           placeholder="Recipient address (0x...)"
-          className="input-field font-mono text-sm"
+          className="input-field text-sm"
         />
         <div className="flex gap-2">
           <input
@@ -105,10 +105,10 @@ export function DepositWithdraw({ vaultAddress }: Props) {
           </button>
         </div>
         {withdrawHook.isSuccess && (
-          <p className="text-sm text-green-400">Withdrawal confirmed!</p>
+          <p className="font-mono text-sm text-ink/60">Withdrawal confirmed.</p>
         )}
         {withdrawHook.error && (
-          <p className="text-sm text-red-400">
+          <p className="font-mono text-sm text-terracotta">
             {(withdrawHook.error as Error).message?.slice(0, 100)}
           </p>
         )}

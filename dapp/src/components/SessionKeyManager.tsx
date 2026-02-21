@@ -36,19 +36,19 @@ export function SessionKeyManager({ vaultAddress }: Props) {
 
   return (
     <div className="card">
-      <h3 className="text-lg font-semibold mb-4">Session Key Management</h3>
+      <h3 className="font-mono text-xs text-ink/60 mb-4 tracking-widest uppercase">Session Key Management</h3>
 
       {/* Issue Session Key */}
       <div className="space-y-3 mb-6">
-        <h4 className="text-sm font-medium text-plimsoll-400">
-          Issue Session Key
+        <h4 className="font-mono text-xs text-terracotta tracking-widest uppercase">
+          [ Issue_Key ]
         </h4>
         <input
           type="text"
           value={agentAddress}
           onChange={(e) => setAgentAddress(e.target.value)}
           placeholder="Agent address (0x...)"
-          className="input-field font-mono text-sm"
+          className="input-field text-sm"
         />
         <div className="grid grid-cols-3 gap-2">
           <div>
@@ -109,16 +109,16 @@ export function SessionKeyManager({ vaultAddress }: Props) {
               : "Issue Session Key"}
         </button>
         {issueHook.isSuccess && (
-          <p className="text-sm text-green-400">
-            Session key issued successfully!
+          <p className="font-mono text-sm text-ink/60">
+            Session key issued successfully.
           </p>
         )}
       </div>
 
       {/* Query / Revoke Session */}
-      <div className="space-y-3 border-t border-gray-700 pt-4">
-        <h4 className="text-sm font-medium text-plimsoll-400">
-          Query / Revoke Agent Session
+      <div className="space-y-3 border-t border-ink/20 pt-4">
+        <h4 className="font-mono text-xs text-terracotta tracking-widest uppercase">
+          [ Query / Revoke ]
         </h4>
         <div className="flex gap-2">
           <input
@@ -126,7 +126,7 @@ export function SessionKeyManager({ vaultAddress }: Props) {
             value={queryAgent}
             onChange={(e) => setQueryAgent(e.target.value)}
             placeholder="Agent address to query (0x...)"
-            className="input-field font-mono text-sm"
+            className="input-field text-sm"
           />
           <button
             className="btn-danger whitespace-nowrap"
@@ -145,9 +145,9 @@ export function SessionKeyManager({ vaultAddress }: Props) {
 
         {/* Session info display */}
         {queryAgent && sessionInfo.data && (
-          <div className="bg-gray-800/50 rounded-lg p-3 space-y-1 text-sm">
+          <div className="bg-surface border border-ink/20 p-3 space-y-1 font-mono text-sm">
             <div className="flex justify-between">
-              <span className="text-gray-400">Active:</span>
+              <span className="text-ink/60">Active:</span>
               <span>
                 {sessionActive.data ? (
                   <span className="badge-active">Yes</span>
@@ -157,8 +157,8 @@ export function SessionKeyManager({ vaultAddress }: Props) {
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-400">Expires:</span>
-              <span className="font-mono">
+              <span className="text-ink/60">Expires:</span>
+              <span>
                 {(sessionInfo.data as any)?.expiresAt
                   ? new Date(
                       Number((sessionInfo.data as any).expiresAt) * 1000
@@ -167,24 +167,24 @@ export function SessionKeyManager({ vaultAddress }: Props) {
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-400">Max Single:</span>
-              <span className="font-mono">
+              <span className="text-ink/60">Max Single:</span>
+              <span>
                 {(sessionInfo.data as any)?.maxSingleAmount
                   ? `${formatEther((sessionInfo.data as any).maxSingleAmount)} ETH`
                   : "N/A"}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-400">Daily Budget:</span>
-              <span className="font-mono">
+              <span className="text-ink/60">Daily Budget:</span>
+              <span>
                 {(sessionInfo.data as any)?.dailyBudget
                   ? `${formatEther((sessionInfo.data as any).dailyBudget)} ETH`
                   : "N/A"}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-400">Spent Today:</span>
-              <span className="font-mono">
+              <span className="text-ink/60">Spent Today:</span>
+              <span>
                 {(sessionInfo.data as any)?.spentToday
                   ? `${formatEther((sessionInfo.data as any).spentToday)} ETH`
                   : "0 ETH"}
@@ -194,7 +194,7 @@ export function SessionKeyManager({ vaultAddress }: Props) {
         )}
 
         {revokeHook.isSuccess && (
-          <p className="text-sm text-green-400">Session key revoked!</p>
+          <p className="font-mono text-sm text-ink/60">Session key revoked.</p>
         )}
       </div>
     </div>

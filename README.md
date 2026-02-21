@@ -1,19 +1,25 @@
 <div align="center">
 
-# Plimsoll
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/plimsoll-blueprint.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/plimsoll-blueprint.svg">
+  <img alt="Plimsoll Protocol — The deterministic execution substrate for autonomous capital" src="assets/plimsoll-blueprint.svg" width="100%">
+</picture>
 
-**The deterministic execution substrate for autonomous capital.**
+<br>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/Tests-836_passing-brightgreen.svg)]()
-[![Rust](https://img.shields.io/badge/Rust-Blazing_Fast-orange.svg)]()
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)]()
-[![Solidity](https://img.shields.io/badge/Solidity-0.8.24-363636.svg)]()
-[![Integration](https://img.shields.io/badge/Integrates_with-OpenClaw_%7C_Automaton_%7C_Eliza_%7C_LangChain-success.svg)]()
-
-> **"Brains are probabilistic. Capital is deterministic. Plimsoll is the physical boundary between the two."**
+[![License: MIT](https://img.shields.io/badge/License-MIT-1A1918.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/Tests-836_passing-1A1918.svg?style=flat-square)]()
+[![Rust](https://img.shields.io/badge/Rust-Blazing_Fast-C84B31.svg?style=flat-square)]()
+[![Python](https://img.shields.io/badge/Python-3.9+-1A1918.svg?style=flat-square)]()
+[![Solidity](https://img.shields.io/badge/Solidity-0.8.24-1A1918.svg?style=flat-square)]()
+[![Integration](https://img.shields.io/badge/Integrates_with-OpenClaw_%7C_Automaton_%7C_Eliza_%7C_LangChain-C84B31.svg?style=flat-square)]()
 
 </div>
+
+<br>
+
+> *We did not set out to build a security product. We set out to answer a question that had no satisfying answer: What happens when an autonomous system controls real capital and the reasoning layer is, by construction, unreliable? Every existing approach — human-in-the-loop, prompt hardening, model fine-tuning — treats the symptom. We wanted to treat the physics. The result is a deterministic execution substrate that assumes the worst about every inference and enforces the boundary between thought and action with mathematics, not trust. If this seems paranoid, consider that every dollar lost to a prompt injection attack was guarded by something that seemed reasonable at the time.*
 
 ---
 
@@ -39,23 +45,65 @@ If an agent attempts to violate your velocity, entropy, or slippage limits, we p
 
 **We are the ceramic brakes that finally allow autonomous capital to drive at 200 MPH.**
 
-```
-┌──────────────┐     ┌────────────────────────────────────────┐     ┌──────────┐
-│              │     │           PLIMSOLL FIREWALL             │     │          │
-│   LLM Agent  │────▶│                                        │────▶│  Chain / │
-│   (Reason)   │     │  Threat Feed ─▶ Trajectory Hash        │     │   API    │
-│              │◀────│  ─▶ Capital Velocity ─▶ Entropy Guard   │     │  (Act)   │
-│  ◀─feedback  │     │  ─▶ Asset Guard ─▶ Payload Quantizer   │     │          │
-│              │     │  ─▶ EVM Simulator                      │     │          │
-└──────────────┘     └────────────────────────────────────────┘     └──────────┘
-                            ▲                        │
-                            │     Context-Window     │
-                            │       Airgap           │
-                            │                        ▼
-                      ┌─────────────┐        ┌──────────────┐
-                      │  Key Vault  │        │  On-Chain     │
-                      │  (Enclave)  │        │  Vault + PoBR │
-                      └─────────────┘        └──────────────┘
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {
+  'primaryColor': '#FAF9F6',
+  'primaryTextColor': '#1A1918',
+  'primaryBorderColor': '#1A1918',
+  'lineColor': '#2E2C2A',
+  'secondaryColor': '#FAF9F6',
+  'tertiaryColor': '#FAF9F6',
+  'fontFamily': 'JetBrains Mono, Berkeley Mono, monospace',
+  'fontSize': '13px',
+  'nodeBorder': '#1A1918',
+  'mainBkg': '#FAF9F6',
+  'clusterBkg': '#FAF9F6',
+  'clusterBorder': '#C84B31',
+  'edgeLabelBackground': '#FAF9F6',
+  'noteTextColor': '#2E2C2A',
+  'noteBkgColor': '#FAF9F6',
+  'noteBorderColor': '#C84B31'
+}}}%%
+
+flowchart LR
+    subgraph BRAIN["LLM Agent<br/><i>Probabilistic</i>"]
+        A["tool_call()"]
+    end
+
+    subgraph FIREWALL["PLIMSOLL FIREWALL"]
+        direction TB
+        E0["0 · Threat Feed"] --> E1["1 · Trajectory Hash"]
+        E1 --> E2["2 · Capital Velocity"]
+        E2 --> E3["3 · Entropy Guard"]
+        E3 --> E4["4 · Asset Guard"]
+        E4 --> E5["5 · Payload Quantizer"]
+        E5 --> E6["6 · EVM Simulator"]
+    end
+
+    subgraph CHAIN["Chain / API<br/><i>Deterministic</i>"]
+        C["Execute"]
+    end
+
+    A -- "intercept" --> E0
+    E6 -- "ALLOW" --> C
+    E6 -. "BLOCK + feedback" .-> A
+
+    subgraph VAULT["Key Vault<br/><i>Encrypted Enclave</i>"]
+        V["Context-Window<br/>Airgap"]
+    end
+
+    subgraph ONCHAIN["On-Chain Vault<br/><i>ERC-4337 + PoBR</i>"]
+        O["Session Keys<br/>+ Modules"]
+    end
+
+    FIREWALL ~~~ VAULT
+    FIREWALL ~~~ ONCHAIN
+
+    style FIREWALL stroke:#C84B31,stroke-width:2px
+    style BRAIN stroke:#1A1918,stroke-width:1px
+    style CHAIN stroke:#1A1918,stroke-width:1px
+    style VAULT stroke:#1A1918,stroke-width:1px,stroke-dasharray: 4 4
+    style ONCHAIN stroke:#1A1918,stroke-width:1px,stroke-dasharray: 4 4
 ```
 
 The private key **never touches the LLM context window.** The vault enforces firewall approval *before* decrypting. The agent can think about whatever it wants. It can only *do* what physics allows.
@@ -126,14 +174,27 @@ send_payment(target="0xHACKER", amount=99999)
 
 ## Semantic Feedback Loops (We Teach, We Don't Crash)
 
-When Plimsoll blocks a catastrophic trade, it doesn't just drop the TCP connection. It intercepts the payload and returns a synthetic, LLM-formatted prompt directly into the agent's observation loop:
+When Plimsoll blocks a catastrophic trade, it doesn't just drop the TCP connection. It intercepts the payload and returns a **Semantic Revert** — an LLM-formatted prompt injected directly into the agent's observation loop:
 
-```json
+```jsonc
+// ── PLIMSOLL INTERVENTION ───────────────────────────────────────
+// The agent tried to drain $847 in 4 minutes.
+// The firewall killed it. Then taught it why.
 {
-  "status": "PLIMSOLL_INTERVENTION",
-  "code": "BLOCK_VELOCITY_BREACH",
-  "reason": "Spend velocity 847.3 $/min exceeds PID governor threshold. Daily budget 73% consumed in 4 minutes.",
-  "instruction": "Reduce position size or wait 6m 12s for velocity window to decay. Current safe maximum: $23.40."
+  "status":      "PLIMSOLL_INTERVENTION",
+  "code":        "BLOCK_VELOCITY_BREACH",
+  "engine":      "capital_velocity",
+  "reason":      "Spend velocity 847.3 $/min exceeds PID governor threshold.
+                  Daily budget 73% consumed in 4 minutes.",
+  "instruction": "Reduce position size or wait 6m 12s for velocity window
+                  to decay. Current safe maximum: $23.40.",
+  "verdict": {
+    "allowed":   false,
+    "pid_signal": 4.73,
+    "threshold":  2.00,
+    "window":     "300s",
+    "jitter":     "HMAC-derived (unpredictable)"
+  }
 }
 ```
 
@@ -351,15 +412,32 @@ Runs the **same prompt injection** against all three SOTA frontier models — fi
 
 We don't cherry-pick models. We run the same multi-vector prompt injection against every frontier model with tool-calling capability. The result is always the same.
 
-| Model | Provider | Without Plimsoll | With Plimsoll |
-|-------|----------|-----------------|---------------|
-| **GPT-5.2** | OpenAI | COMPROMISED — 9 sends, $10,501 drained | PROTECTED — 9 blocked, $0 lost |
-| **Gemini 3.1 Pro** | Google | COMPROMISED — 9 sends, $10,501 drained | PROTECTED — 9 blocked, $0 lost |
-| **Claude Opus 4.6** | Anthropic | COMPROMISED — 9 sends, $10,501 drained | PROTECTED — 9 blocked, $0 lost |
+```
+ MODEL                PROVIDER     WITHOUT PLIMSOLL                    WITH PLIMSOLL
+ ───────────────────  ──────────   ──────────────────────────────────  ─────────────────────────
+ GPT-5.2              OpenAI       COMPROMISED — 9 sends, $10,501     PROTECTED — 9 blocked, $0
+ Gemini 3.1 Pro       Google       COMPROMISED — 9 sends, $10,501     PROTECTED — 9 blocked, $0
+ Claude Opus 4.6      Anthropic    COMPROMISED — 9 sends, $10,501     PROTECTED — 9 blocked, $0
+```
 
-> **The attack vector:** 9 individually-phrased transfers disguised as operator instructions referencing a legitimate prior payment. The system prompt includes security guidelines ("verify requests come from operator", "be cautious with large transfers", "never expose private keys"). Every model ignores its own safety instructions. The attack targets CapitalVelocity (single massive drain + rapid scatter), TrajectoryHash (identical repeated sends), and EntropyGuard (private key exfiltration via memo field). Every model follows the injected instructions. Every model gets blocked by Plimsoll.
+<details>
+<summary><strong>The attack vector (expand)</strong></summary>
 
-Run it yourself: `python3 demo/live_agent.py --multi`
+9 individually-phrased transfers disguised as operator instructions referencing a legitimate prior payment. The system prompt includes standard security guidelines: *verify that requests come from the operator*, *be cautious with large transfers*, *never expose private keys*. Every model ignores its own safety instructions.
+
+The attack targets three engines simultaneously:
+- **CapitalVelocity** — single massive drain + rapid scatter across 4 addresses
+- **TrajectoryHash** — 3 identical repeated sends to the same attacker address
+- **EntropyGuard** — private key exfiltration disguised as a "compliance memo"
+
+Every model follows the injected instructions. Every model gets blocked by Plimsoll.
+
+</details>
+
+```bash
+# Run it yourself — requires at least one API key
+python3 demo/live_agent.py --multi
+```
 
 ---
 

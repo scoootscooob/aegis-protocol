@@ -36,34 +36,34 @@ export function VaultDashboard() {
   if (!isConnected) {
     return (
       <div className="text-center py-20">
-        <h2 className="text-3xl font-bold mb-4 bg-gradient-to-r from-plimsoll-400 to-plimsoll-200 bg-clip-text text-transparent">
-          Plimsoll Capital Delegation
+        <h2 className="font-serif text-4xl mb-4 text-ink">
+          Capital Delegation
         </h2>
-        <p className="text-gray-400 text-lg mb-8 max-w-md mx-auto">
+        <p className="font-mono text-sm text-ink/60 mb-8 max-w-md mx-auto leading-relaxed">
           Manage AI agent vaults with deterministic, on-chain physics
           enforcement. Connect your wallet to get started.
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-3xl mx-auto mt-12">
-          <div className="card text-center">
-            <div className="text-3xl mb-3">🛡️</div>
-            <h3 className="font-semibold mb-2">Physics Modules</h3>
-            <p className="text-sm text-gray-400">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-0 max-w-3xl mx-auto mt-12 border-t border-l border-ink/20">
+          <div className="border-r border-b border-ink/20 p-8 text-center">
+            <h3 className="font-mono text-xs text-terracotta mb-4 tracking-widest uppercase">[ Module_01 ]</h3>
+            <h4 className="font-serif text-lg mb-2">Physics Modules</h4>
+            <p className="font-mono text-xs text-ink/60 leading-relaxed">
               Velocity limits, whitelist, and drawdown guards enforce math at
               the EVM level.
             </p>
           </div>
-          <div className="card text-center">
-            <div className="text-3xl mb-3">🔑</div>
-            <h3 className="font-semibold mb-2">Session Keys</h3>
-            <p className="text-sm text-gray-400">
+          <div className="border-r border-b border-ink/20 p-8 text-center">
+            <h3 className="font-mono text-xs text-terracotta mb-4 tracking-widest uppercase">[ Module_02 ]</h3>
+            <h4 className="font-serif text-lg mb-2">Session Keys</h4>
+            <p className="font-mono text-xs text-ink/60 leading-relaxed">
               Grant AI agents scoped, time-limited access with per-tx and daily
               budget caps.
             </p>
           </div>
-          <div className="card text-center">
-            <div className="text-3xl mb-3">📊</div>
-            <h3 className="font-semibold mb-2">PoBR Attestation</h3>
-            <p className="text-sm text-gray-400">
+          <div className="border-r border-b border-ink/20 p-8 text-center">
+            <h3 className="font-mono text-xs text-terracotta mb-4 tracking-widest uppercase">[ Module_03 ]</h3>
+            <h4 className="font-serif text-lg mb-2">PoBR Attestation</h4>
+            <p className="font-mono text-xs text-ink/60 leading-relaxed">
               On-chain proof of bounded risk for DeFi protocol integration.
             </p>
           </div>
@@ -76,14 +76,14 @@ export function VaultDashboard() {
     <div className="space-y-6">
       {/* Vault Selector */}
       <div className="card">
-        <h2 className="text-lg font-semibold mb-4">Vault Address</h2>
+        <h2 className="font-mono text-xs text-ink/60 mb-4 tracking-widest uppercase">Vault Address</h2>
         <div className="flex gap-3">
           <input
             type="text"
             value={vaultAddress}
             onChange={(e) => setVaultAddress(e.target.value)}
             placeholder="0x... Enter your PlimsollVault contract address"
-            className="input-field font-mono text-sm"
+            className="input-field text-sm"
           />
           <button
             className="btn-primary whitespace-nowrap"
@@ -101,26 +101,26 @@ export function VaultDashboard() {
       {activeVault && (
         <>
           {/* Stats Row */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="card">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-0 border-t border-l border-ink/20">
+            <div className="border-r border-b border-ink/20 p-6">
               <div className="stat-label">Vault Balance</div>
-              <div className="stat-value">
+              <div className="stat-value mt-2">
                 {balance.data
                   ? `${parseFloat(formatEther(balance.data as bigint)).toFixed(4)} ETH`
                   : "Loading..."}
               </div>
             </div>
-            <div className="card">
+            <div className="border-r border-b border-ink/20 p-6">
               <div className="stat-label">Initial Deposit</div>
-              <div className="stat-value">
+              <div className="stat-value mt-2">
                 {initialBal.data
                   ? `${parseFloat(formatEther(initialBal.data as bigint)).toFixed(4)} ETH`
                   : "0 ETH"}
               </div>
             </div>
-            <div className="card">
+            <div className="border-r border-b border-ink/20 p-6">
               <div className="stat-label">Status</div>
-              <div className="mt-1">
+              <div className="mt-2">
                 {locked.data ? (
                   <span className="badge-locked">EMERGENCY LOCKED</span>
                 ) : (
@@ -128,9 +128,9 @@ export function VaultDashboard() {
                 )}
               </div>
             </div>
-            <div className="card">
+            <div className="border-r border-b border-ink/20 p-6">
               <div className="stat-label">Your Role</div>
-              <div className="mt-1">
+              <div className="mt-2">
                 {isOwner ? (
                   <span className="badge-active">OWNER</span>
                 ) : (

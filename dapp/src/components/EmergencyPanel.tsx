@@ -15,15 +15,19 @@ export function EmergencyPanel({ vaultAddress, isLocked }: Props) {
   return (
     <div
       className={`card border ${
-        isLocked ? "border-red-500/50 bg-red-950/20" : "border-yellow-500/30"
+        isLocked ? "border-terracotta bg-terracotta/5" : "border-ink/30"
       }`}
     >
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            {isLocked ? "🔴" : "⚠️"} Emergency Controls
+          <h3 className="font-mono text-xs tracking-widest uppercase mb-2">
+            {isLocked ? (
+              <span className="text-terracotta">[ LOCKED ]</span>
+            ) : (
+              <span className="text-ink/60">[ Emergency Controls ]</span>
+            )}
           </h3>
-          <p className="text-sm text-gray-400 mt-1">
+          <p className="font-mono text-sm text-ink/60">
             {isLocked
               ? "Vault is LOCKED. All session keys and executions are frozen."
               : "Lock the vault to immediately freeze all agent activity."}
@@ -54,12 +58,12 @@ export function EmergencyPanel({ vaultAddress, isLocked }: Props) {
       </div>
 
       {isSuccess && (
-        <p className="text-sm text-green-400 mt-2">
-          {isLocked ? "Vault unlocked!" : "Vault locked!"}
+        <p className="font-mono text-sm text-ink/60 mt-2">
+          {isLocked ? "Vault unlocked." : "Vault locked."}
         </p>
       )}
       {error && (
-        <p className="text-sm text-red-400 mt-2">
+        <p className="font-mono text-sm text-terracotta mt-2">
           {(error as Error).message?.slice(0, 150)}
         </p>
       )}

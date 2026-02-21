@@ -19,50 +19,48 @@ export function ModuleStatus({
     {
       name: "Velocity Limit",
       description: "Enforces maximum spend rate per rolling hour",
-      icon: "⚡",
+      label: "Engine_02",
       address: velocityAddr,
     },
     {
       name: "Target Whitelist",
       description: "Only allows pre-approved destination contracts",
-      icon: "🎯",
+      label: "Engine_04",
       address: whitelistAddr,
     },
     {
       name: "Drawdown Guard",
       description: "Prevents portfolio drawdown beyond configured floor",
-      icon: "🛡️",
+      label: "Engine_06",
       address: drawdownAddr,
     },
   ];
 
   return (
     <div className="card">
-      <h3 className="text-lg font-semibold mb-4">Physics Modules</h3>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <h3 className="font-mono text-xs text-ink/60 mb-4 tracking-widest uppercase">Physics Modules</h3>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-0 border-t border-l border-ink/20">
         {modules.map((mod) => {
           const isActive = mod.address && mod.address !== ZERO;
           return (
             <div
               key={mod.name}
-              className={`rounded-lg p-4 border ${
-                isActive
-                  ? "border-green-500/30 bg-green-950/10"
-                  : "border-gray-700/50 bg-gray-800/30"
+              className={`border-r border-b border-ink/20 p-4 ${
+                isActive ? "bg-paper" : "bg-surface"
               }`}
             >
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xl">{mod.icon}</span>
-                <span className="font-medium">{mod.name}</span>
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-mono text-[10px] text-terracotta tracking-widest uppercase">[ {mod.label} ]</span>
                 {isActive ? (
-                  <span className="badge-active ml-auto">ON</span>
+                  <span className="badge-active">ON</span>
                 ) : (
-                  <span className="badge-inactive ml-auto">OFF</span>
+                  <span className="badge-inactive">OFF</span>
                 )}
               </div>
-              <p className="text-xs text-gray-400">{mod.description}</p>
+              <div className="font-serif text-lg mb-1">{mod.name}</div>
+              <p className="font-mono text-xs text-ink/60">{mod.description}</p>
               {isActive && (
-                <p className="text-xs font-mono text-gray-500 mt-2 truncate">
+                <p className="font-mono text-[10px] text-ink/40 mt-2 truncate">
                   {mod.address}
                 </p>
               )}

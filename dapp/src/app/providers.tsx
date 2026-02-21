@@ -12,10 +12,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
         <ConnectKitProvider
-          theme="midnight"
+          theme="minimal"
           customTheme={{
-            "--ck-font-family": "inherit",
-            "--ck-accent-color": "#0c89eb",
+            "--ck-font-family": '"JetBrains Mono", monospace',
+            "--ck-accent-color": "#C84B31",
+            "--ck-accent-text-color": "#FAF9F6",
+            "--ck-body-background": "#FAF9F6",
+            "--ck-body-color": "#1A1918",
+            "--ck-border-radius": "0",
           }}
         >
           {children}

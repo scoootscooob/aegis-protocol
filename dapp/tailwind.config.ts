@@ -1,5 +1,18 @@
 import type { Config } from "tailwindcss";
 
+/**
+ * Plimsoll Design System — "Academic Brutalism"
+ *
+ * 1970s MIT Physics / classified DARPA document aesthetic.
+ * No gradients. No drop shadows. No rounded corners.
+ *
+ * Palette:
+ *   paper      #FAF9F6   Warm ivory/parchment (never pure white)
+ *   ink        #1A1918   Deep espresso/charcoal (never pure black)
+ *   surface    #EAE8E3   Slightly darker paper for code blocks/cards
+ *   terracotta #C84B31   Muted rust/red for critical alerts & accents
+ */
+
 const config: Config = {
   content: [
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
@@ -9,19 +22,15 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        plimsoll: {
-          50: "#f0f7ff",
-          100: "#e0eefe",
-          200: "#b9ddfe",
-          300: "#7cc3fd",
-          400: "#36a5fa",
-          500: "#0c89eb",
-          600: "#006cc9",
-          700: "#0156a3",
-          800: "#064a86",
-          900: "#0b3f6f",
-          950: "#07284a",
-        },
+        paper: '#FAF9F6',
+        ink: '#1A1918',
+        surface: '#EAE8E3',
+        terracotta: '#C84B31',
+      },
+      fontFamily: {
+        serif: ['"Newsreader"', '"EB Garamond"', '"Times New Roman"', 'serif'],
+        mono: ['"JetBrains Mono"', '"IBM Plex Mono"', '"Courier New"', 'monospace'],
+        sans: ['"Inter"', 'system-ui', 'sans-serif'],
       },
     },
   },
