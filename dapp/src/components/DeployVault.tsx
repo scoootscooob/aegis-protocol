@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { type Address } from "viem";
-import { useCreateVault, useAcceptOwnership } from "@/hooks/useFactory";
+import { useCreateVault, useAcceptOwnership, isFactoryDeployed } from "@/hooks/useFactory";
 
 interface Props {
   onVaultCreated?: (vaultAddress: Address) => void;
@@ -48,7 +48,23 @@ export function DeployVault({ onVaultCreated }: Props) {
         </button>
       </div>
 
-      {isExpanded && (
+      {isExpanded && !isFactoryDeployed && (
+        <div className="border-t border-ink/20 pt-4">
+          <p className="font-mono text-sm text-ink/60">
+            Factory contract not yet deployed to Sepolia. Deploy via:
+          </p>
+          <pre className="font-mono text-xs text-ink/40 mt-2 p-3 bg-surface overflow-x-auto">
+{`cd contracts
+forge script script/DeployFactory.s.sol \\
+  --rpc-url $SEPOLIA_RPC --broadcast`}
+          </pre>
+          <p className="font-mono text-xs text-ink/40 mt-2">
+            Then update the factory address in <code>contracts.ts</code>.
+          </p>
+        </div>
+      )}
+
+      {isExpanded && isFactoryDeployed && (
         <div className="space-y-4 border-t border-ink/20 pt-4">
           <h4 className="font-mono text-xs text-terracotta tracking-widest uppercase">
             [ Module_Params ]

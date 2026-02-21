@@ -9,6 +9,8 @@ import { parseEther, type Address } from "viem";
 import { PLIMSOLL_FACTORY_ABI, PLIMSOLL_VAULT_ABI, CONTRACTS } from "@/lib/contracts";
 
 const FACTORY_ADDRESS = CONTRACTS.sepolia.factory as Address;
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+export const isFactoryDeployed = FACTORY_ADDRESS !== ZERO_ADDRESS;
 
 // ── Write: createVault ──────────────────────────────────────
 
@@ -64,7 +66,7 @@ export function useOwnerVaults(ownerAddress: Address | undefined) {
     functionName: "getVaultsByOwner",
     args: ownerAddress ? [ownerAddress] : undefined,
     query: {
-      enabled: !!ownerAddress,
+      enabled: !!ownerAddress && isFactoryDeployed,
     },
   });
 }
@@ -76,5 +78,8 @@ export function useVaultCount() {
     address: FACTORY_ADDRESS,
     abi: PLIMSOLL_FACTORY_ABI,
     functionName: "getVaultCount",
+    query: {
+      enabled: isFactoryDeployed,
+    },
   });
 }
