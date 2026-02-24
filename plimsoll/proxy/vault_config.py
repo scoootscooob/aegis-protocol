@@ -31,24 +31,35 @@ logger = logging.getLogger("plimsoll.proxy.vault_config")
 
 # ── Minimal ABI fragments for on-chain reads ────────────────
 
-# velocityModule() → address
-_VELOCITY_MODULE_SIG = "0xdb0f5e42"
-# whitelistModule() → address
-_WHITELIST_MODULE_SIG = "0x6d3fb2d0"
-# drawdownModule() → address
-_DRAWDOWN_MODULE_SIG = "0x8cc2a8a0"
-# owner() → address
+# PlimsollVault: velocityModule() → address
+_VELOCITY_MODULE_SIG = "0x951be135"
+# PlimsollVault: whitelistModule() → address
+_WHITELIST_MODULE_SIG = "0x8fea31b0"
+# PlimsollVault: drawdownModule() → address
+_DRAWDOWN_MODULE_SIG = "0xdd4c17ae"
+# PlimsollVault: owner() → address
 _OWNER_SIG = "0x8da5cb5b"
-# emergencyLocked() → bool
-_EMERGENCY_LOCKED_SIG = "0x7e4ac72a"
+# PlimsollVault: emergencyLocked() → bool
+_EMERGENCY_LOCKED_SIG = "0xe92fab8d"
 
 # VelocityLimitModule: maxPerHour() → uint256
-_MAX_PER_HOUR_SIG = "0x4a1560e0"
+_MAX_PER_HOUR_SIG = "0x335c9d8c"
 # VelocityLimitModule: maxSingleTx() → uint256
-_MAX_SINGLE_TX_SIG = "0x9f5ed724"
+_MAX_SINGLE_TX_SIG = "0x0cf96009"
 
 # DrawdownGuardModule: maxDrawdownBps() → uint256
-_MAX_DRAWDOWN_BPS_SIG = "0xd7e1e0c0"
+_MAX_DRAWDOWN_BPS_SIG = "0x5661d461"
+
+# TargetWhitelistModule:
+# getWhitelistCount() → uint256
+_WHITELIST_COUNT_SIG = "0x3edff20f"
+# whitelistedList(uint256) → address
+_WHITELISTED_LIST_SIG = "0x05c8d3eb"
+# whitelisted(address) → bool
+_WHITELISTED_SIG = "0xd936547e"
+
+# Maximum whitelist entries to read (prevent abuse)
+_MAX_WHITELIST_ENTRIES = 100
 
 
 @dataclass
@@ -73,6 +84,8 @@ class VaultConfigCache:
     rpc_url: str
     cache_ttl_secs: float = 300.0
     _cache: dict[str, CachedConfig] = field(default_factory=dict, init=False, repr=False)
+    _whitelist_cache: dict[str, frozenset[str]] = field(default_factory=dict, init=False, repr=False)
+    _whitelist_fetched_at: dict[str, float] = field(default_factory=dict, init=False, repr=False)
 
     async def get(self, vault_address: str) -> PlimsollConfig:
         """Get PlimsollConfig for a vault, using cache if fresh."""
@@ -93,6 +106,109 @@ class VaultConfigCache:
     async def get_cached_info(self, vault_address: str) -> Optional[CachedConfig]:
         """Get cached info (including owner, lock status) if available."""
         return self._cache.get(vault_address.lower())
+
+    # ── Whitelist Gate ─────────────────────────────────────────
+
+    async def check_whitelist(
+        self, vault_address: str, target: str
+    ) -> tuple[bool, str]:
+        """Check if a destination address is whitelisted for this vault.
+
+        Returns (allowed, reason).
+
+        If the vault has no whitelist module or an empty whitelist,
+        returns (True, ...) to allow legacy/unconfigured vaults to work.
+        """
+        key = vault_address.lower()
+        now = time.time()
+
+        # Load whitelist if not cached or stale
+        fetched_at = self._whitelist_fetched_at.get(key, 0.0)
+        if (now - fetched_at) >= self.cache_ttl_secs:
+            await self._fetch_whitelist(vault_address)
+
+        whitelist = self._whitelist_cache.get(key)
+
+        # Empty whitelist = legacy mode — don't block
+        if not whitelist:
+            return (True, "No whitelist configured — legacy mode")
+
+        target_lower = target.lower()
+        if target_lower in whitelist:
+            return (True, f"Target {target[:10]}... is whitelisted")
+
+        return (
+            False,
+            f"WHITELIST GATE: Target {target} is not on the vault's "
+            f"approved whitelist ({len(whitelist)} entries). "
+            f"Add it via the Plimsoll dashboard.",
+        )
+
+    async def _fetch_whitelist(self, vault_address: str) -> None:
+        """Read the vault's whitelist module entries from the chain."""
+        key = vault_address.lower()
+        self._whitelist_fetched_at[key] = time.time()
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Step 1: Read whitelistModule address from vault
+                wl_module_raw = await self._eth_call(
+                    client, vault_address, _WHITELIST_MODULE_SIG
+                )
+                if not wl_module_raw or wl_module_raw == "0" * 40:
+                    self._whitelist_cache[key] = frozenset()
+                    return
+
+                wl_module_addr = "0x" + wl_module_raw[-40:]
+
+                # Step 2: Read getWhitelistCount()
+                count_raw = await self._eth_call(
+                    client, wl_module_addr, _WHITELIST_COUNT_SIG
+                )
+                if not count_raw:
+                    self._whitelist_cache[key] = frozenset()
+                    return
+
+                count = int(count_raw, 16)
+                if count == 0:
+                    self._whitelist_cache[key] = frozenset()
+                    return
+
+                # Cap to prevent abuse
+                count = min(count, _MAX_WHITELIST_ENTRIES)
+
+                # Step 3: Read each whitelistedList(i) entry
+                addresses: set[str] = set()
+                for i in range(count):
+                    # Encode whitelistedList(uint256 i) — selector + abi-encoded uint256
+                    index_hex = hex(i)[2:].zfill(64)
+                    data = _WHITELISTED_LIST_SIG + index_hex
+                    addr_raw = await self._eth_call(client, wl_module_addr, data)
+                    if addr_raw:
+                        addr = "0x" + addr_raw[-40:].lower()
+                        # Step 4: Verify via whitelisted(address) mapping
+                        # (removeTarget sets mapping to false but doesn't remove from array)
+                        addr_padded = addr[2:].lower().zfill(64)
+                        verify_data = _WHITELISTED_SIG + addr_padded
+                        is_active = await self._eth_call(
+                            client, wl_module_addr, verify_data
+                        )
+                        if is_active and int(is_active, 16) == 1:
+                            addresses.add(addr)
+
+                self._whitelist_cache[key] = frozenset(addresses)
+                logger.info(
+                    "Loaded whitelist for vault %s: %d active entries",
+                    vault_address[:10], len(addresses),
+                )
+
+        except Exception as exc:
+            logger.warning(
+                "Failed to fetch whitelist for %s: %s", vault_address[:10], exc
+            )
+            # Don't block on failure — keep existing cache or empty
+            if key not in self._whitelist_cache:
+                self._whitelist_cache[key] = frozenset()
 
     async def _fetch_from_chain(self, vault_address: str) -> PlimsollConfig:
         """Read vault parameters from the blockchain."""

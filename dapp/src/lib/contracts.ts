@@ -409,6 +409,85 @@ export const DRAWDOWN_MODULE_ABI = [
   },
 ] as const;
 
+// ── TargetWhitelistModule ABI ────────────────────────────────
+
+export const WHITELIST_MODULE_ABI = [
+  {
+    name: "addTarget",
+    type: "function",
+    inputs: [{ name: "target", type: "address" }],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    name: "removeTarget",
+    type: "function",
+    inputs: [{ name: "target", type: "address" }],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    name: "addTargets",
+    type: "function",
+    inputs: [{ name: "targets", type: "address[]" }],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    name: "checkTarget",
+    type: "function",
+    inputs: [{ name: "target", type: "address" }],
+    outputs: [
+      { name: "allowed", type: "bool" },
+      { name: "reason", type: "string" },
+    ],
+    stateMutability: "view",
+  },
+  {
+    name: "getWhitelistCount",
+    type: "function",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    name: "whitelisted",
+    type: "function",
+    inputs: [{ name: "", type: "address" }],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
+  },
+  {
+    name: "whitelistedList",
+    type: "function",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+  },
+  {
+    name: "owner",
+    type: "function",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+  },
+  // Events
+  {
+    name: "TargetAdded",
+    type: "event",
+    inputs: [
+      { name: "target", type: "address", indexed: true },
+    ],
+  },
+  {
+    name: "TargetRemoved",
+    type: "event",
+    inputs: [
+      { name: "target", type: "address", indexed: true },
+    ],
+  },
+] as const;
+
 // ── Contract Addresses (update after deployment) ─────────────
 
 export const CONTRACTS = {

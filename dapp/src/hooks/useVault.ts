@@ -11,6 +11,7 @@ import {
   PLIMSOLL_ATTESTATION_ABI,
   VELOCITY_MODULE_ABI,
   DRAWDOWN_MODULE_ABI,
+  WHITELIST_MODULE_ABI,
   CONTRACTS,
 } from "@/lib/contracts";
 
@@ -251,6 +252,84 @@ export function useConfigureDrawdown() {
   };
 
   return { configure, hash, isPending, isConfirming, isSuccess, error };
+}
+
+// ── Whitelist Read Hooks ─────────────────────────────────────
+
+export function useWhitelistCount(moduleAddress: Address) {
+  return useReadContract({
+    address: moduleAddress,
+    abi: WHITELIST_MODULE_ABI,
+    functionName: "getWhitelistCount",
+  });
+}
+
+export function useIsWhitelisted(moduleAddress: Address, target: Address) {
+  return useReadContract({
+    address: moduleAddress,
+    abi: WHITELIST_MODULE_ABI,
+    functionName: "whitelisted",
+    args: [target],
+  });
+}
+
+export function useWhitelistedAt(moduleAddress: Address, index: bigint) {
+  return useReadContract({
+    address: moduleAddress,
+    abi: WHITELIST_MODULE_ABI,
+    functionName: "whitelistedList",
+    args: [index],
+  });
+}
+
+// ── Whitelist Write Hooks ────────────────────────────────────
+
+export function useAddTarget() {
+  const { writeContract, data: hash, isPending, error } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+
+  const addTarget = (moduleAddress: Address, target: Address) => {
+    writeContract({
+      address: moduleAddress,
+      abi: WHITELIST_MODULE_ABI,
+      functionName: "addTarget",
+      args: [target],
+    });
+  };
+
+  return { addTarget, hash, isPending, isConfirming, isSuccess, error };
+}
+
+export function useRemoveTarget() {
+  const { writeContract, data: hash, isPending, error } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+
+  const removeTarget = (moduleAddress: Address, target: Address) => {
+    writeContract({
+      address: moduleAddress,
+      abi: WHITELIST_MODULE_ABI,
+      functionName: "removeTarget",
+      args: [target],
+    });
+  };
+
+  return { removeTarget, hash, isPending, isConfirming, isSuccess, error };
+}
+
+export function useAddTargets() {
+  const { writeContract, data: hash, isPending, error } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+
+  const addTargets = (moduleAddress: Address, targets: Address[]) => {
+    writeContract({
+      address: moduleAddress,
+      abi: WHITELIST_MODULE_ABI,
+      functionName: "addTargets",
+      args: [targets],
+    });
+  };
+
+  return { addTargets, hash, isPending, isConfirming, isSuccess, error };
 }
 
 // ── Attestation Hooks ────────────────────────────────────────

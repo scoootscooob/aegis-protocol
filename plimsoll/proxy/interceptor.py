@@ -51,6 +51,67 @@ _vault_firewalls: dict[str, PlimsollFirewall] = {}
 
 # ── Helpers ──────────────────────────────────────────────────
 
+def _normalize_payload(body: dict[str, Any]) -> dict[str, Any]:
+    """Convert a JSON-RPC envelope to the flat dict that all 7 engines expect.
+
+    Engines were designed for::
+
+        {"target": "0x...", "amount": 1.5, "function": "0xa9059cbb", "data": "0x..."}
+
+    But the proxy receives raw JSON-RPC::
+
+        {"method": "eth_sendTransaction", "params": [{"to": "0x...", "value": "0x...", "data": "0x..."}]}
+
+    This normalizer bridges the gap so that ThreatFeed, TrajectoryHash,
+    AssetGuard, PayloadQuantizer, and EVMSimulator all receive the fields
+    they need.
+    """
+    params: dict[str, Any] = {}
+    if "params" in body and isinstance(body["params"], list):
+        for p in body["params"]:
+            if isinstance(p, dict):
+                params = p
+                break
+
+    to = params.get("to", "")
+    data = params.get("data", "") or params.get("input", "")
+    value = params.get("value", "0x0")
+
+    # Decode value from hex wei to float ETH
+    amount = 0.0
+    if isinstance(value, str) and value.startswith("0x"):
+        try:
+            amount = int(value, 16) / 1e18
+        except ValueError:
+            pass
+    elif value:
+        try:
+            amount = float(value)
+        except (ValueError, TypeError):
+            pass
+
+    # Extract function selector (first 4 bytes of calldata)
+    selector = ""
+    if isinstance(data, str) and len(data) >= 10:
+        selector = data[:10].lower()
+
+    return {
+        # Fields engines expect:
+        "target": to.lower() if to else "",
+        "amount": amount,
+        "function": selector,
+        "data": data,
+        "from": params.get("from", ""),
+        "value": value,
+        "gas": params.get("gas", ""),
+        "gasPrice": params.get("gasPrice", ""),
+        "maxFeePerGas": params.get("maxFeePerGas", ""),
+        # Preserve original for forwarding
+        "_raw_jsonrpc": body,
+        "_method": body.get("method", ""),
+    }
+
+
 def _extract_spend(body: dict[str, Any]) -> float:
     """Extract spend amount from a JSON-RPC payload (heuristic)."""
     spend = 0.0
@@ -123,6 +184,22 @@ def _block_response(verdict: Any) -> JSONResponse:
     )
 
 
+def _whitelist_block_response(destination: str, reason: str) -> JSONResponse:
+    """Return a JSON 403 block response for whitelist rejection."""
+    return JSONResponse(
+        {
+            "plimsoll_blocked": True,
+            "verdict": "BLOCK_WHITELIST",
+            "reason": reason,
+            "feedback": (
+                f"Destination {destination} is not on the vault's whitelist. "
+                f"The vault owner must add it via the Plimsoll dashboard."
+            ),
+        },
+        status_code=403,
+    )
+
+
 # ── Route Handlers ───────────────────────────────────────────
 
 async def _handle_rpc(request: Request) -> JSONResponse:
@@ -138,8 +215,11 @@ async def _handle_rpc(request: Request) -> JSONResponse:
     if _is_read_only(body):
         return await _forward_upstream(body)
 
-    spend = _extract_spend(body)
-    verdict = _firewall.evaluate(body, spend_amount=spend)
+    # Normalize JSON-RPC → flat dict for all 7 engines
+    normalized = _normalize_payload(body)
+    spend = normalized["amount"]
+
+    verdict = _firewall.evaluate(normalized, spend_amount=spend)
 
     if verdict.blocked:
         logger.warning("PROXY BLOCK: %s", verdict.reason)
@@ -158,6 +238,14 @@ async def _handle_vault_rpc(request: Request) -> JSONResponse:
 
     The proxy reads the vault's on-chain parameters and configures a
     firewall instance automatically. Zero code changes on the agent side.
+
+    Pipeline::
+
+        Read-only? → pass through
+        Normalize JSON-RPC → flat tx dict
+        Whitelist Gate → BLOCK if destination not whitelisted
+        7-Engine Firewall → BLOCK if any engine triggers
+        Forward to upstream RPC
     """
     vault_address = request.path_params.get("vault_address", "")
 
@@ -176,11 +264,26 @@ async def _handle_vault_rpc(request: Request) -> JSONResponse:
     if _is_read_only(body):
         return await _forward_upstream(body)
 
-    # Get or create per-vault firewall
-    firewall = await _get_vault_firewall(vault_address)
+    # ── Step 1: Normalize JSON-RPC → flat dict for all 7 engines ──
+    normalized = _normalize_payload(body)
+    destination = normalized["target"]
+    spend = normalized["amount"]
 
-    spend = _extract_spend(body)
-    verdict = firewall.evaluate(body, spend_amount=spend)
+    # ── Step 2: Whitelist Gate (fast fail) ────────────────────────
+    # If the vault has a whitelist configured, check destination first.
+    # Empty whitelist = legacy mode (falls through to firewall only).
+    if destination and _vault_cache:
+        allowed, reason = await _vault_cache.check_whitelist(vault_address, destination)
+        if not allowed:
+            logger.warning(
+                "WHITELIST BLOCK [%s]: %s → %s",
+                vault_address[:10], destination[:10], reason,
+            )
+            return _whitelist_block_response(destination, reason)
+
+    # ── Step 3: 7-Engine Firewall Evaluation ─────────────────────
+    firewall = await _get_vault_firewall(vault_address)
+    verdict = firewall.evaluate(normalized, spend_amount=spend)
 
     if verdict.blocked:
         logger.warning("VAULT PROXY BLOCK [%s]: %s", vault_address[:10], verdict.reason)
@@ -212,15 +315,29 @@ async def _get_vault_firewall(vault_address: str) -> PlimsollFirewall:
 
 async def _health(request: Request) -> JSONResponse:
     """Health check endpoint."""
-    stats = {}
+    stats: dict[str, Any] = {}
     if _firewall:
         stats["global"] = _firewall.stats
     stats["vaults_active"] = len(_vault_firewalls)
     stats["cache_entries"] = len(_vault_cache._cache) if _vault_cache else 0
 
+    # Include per-vault whitelist stats
+    if _vault_cache:
+        vault_details: dict[str, Any] = {}
+        for addr, cached in _vault_cache._cache.items():
+            whitelist = _vault_cache._whitelist_cache.get(addr)
+            vault_details[addr[:10] + "..."] = {
+                "whitelist_entries": len(whitelist) if whitelist else 0,
+                "emergency_locked": cached.emergency_locked,
+            }
+        if vault_details:
+            stats["vaults"] = vault_details
+
     return JSONResponse({
         "status": "ok",
         "upstream": _upstream_url,
+        "engines": 7,
+        "protection": "normalizer + whitelist_gate + 7_engine_firewall",
         "stats": stats,
     })
 
