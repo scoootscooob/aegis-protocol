@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAccount } from "wagmi";
 import { formatEther, type Address } from "viem";
 import {
@@ -19,6 +19,39 @@ import { DeployVault } from "./DeployVault";
 import { QuickDeploy } from "./QuickDeploy";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
+
+function ProtectedRpcUrl({ vaultAddress }: { vaultAddress: Address }) {
+  const [copied, setCopied] = useState(false);
+  const rpcUrl = `https://rpc.plimsoll.network/v1/${vaultAddress}`;
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(rpcUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [rpcUrl]);
+
+  return (
+    <div className="card">
+      <span className="font-mono text-[10px] text-terracotta tracking-widest uppercase block mb-2">
+        [ Protected_RPC ]
+      </span>
+      <div className="flex items-center gap-3">
+        <code className="font-mono text-xs text-ink break-all select-all flex-1 bg-surface border border-ink/10 px-3 py-2">
+          {rpcUrl}
+        </code>
+        <button
+          className="btn-primary whitespace-nowrap text-xs"
+          onClick={handleCopy}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <p className="font-mono text-[10px] text-ink/40 mt-2 leading-relaxed">
+        Point your agent&apos;s RPC endpoint here. All transactions are filtered through Plimsoll&apos;s 7-engine firewall.
+      </p>
+    </div>
+  );
+}
 
 export function VaultDashboard() {
   const { address: userAddress, isConnected, isReconnecting } = useAccount();
@@ -173,6 +206,9 @@ export function VaultDashboard() {
 
       {activeVault && (
         <>
+          {/* Protected RPC URL */}
+          <ProtectedRpcUrl vaultAddress={activeVault} />
+
           {/* Stats Row */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-0 border-t border-l border-ink/20">
             <div className="border-r border-b border-ink/20 p-6">
