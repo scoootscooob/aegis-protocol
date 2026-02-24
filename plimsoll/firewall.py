@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -146,6 +146,13 @@ class PlimsollFirewall:
         default_factory=deque, init=False, repr=False
     )
     _paymaster_severed: bool = field(default=False, init=False, repr=False)
+    # Per-engine block counters and recent block event log
+    _per_engine_blocks: dict = field(
+        default_factory=lambda: defaultdict(int), init=False, repr=False
+    )
+    _recent_blocks: deque = field(
+        default_factory=lambda: deque(maxlen=50), init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         self._threat_feed = ThreatFeedEngine(config=self.config.threat_feed)
@@ -168,16 +175,23 @@ class PlimsollFirewall:
         payload: dict[str, Any],
         spend_amount: float = 0.0,
     ) -> Verdict:
-        """Run a payload through all six engines. First BLOCK wins.
+        """Run a payload through all seven engines.
+
+        Three-Pillar Routing:
+            - Pillar 1 (Physics) BLOCK  → Hard reject. First block wins.
+            - Pillar 2 (Immune)  FRICTION → Allowed with cognitive friction.
+              Multiple friction signals accumulate (returned as highest).
+            - Pillar 3 (Protocol) BLOCK → Hard reject (consensus blacklist).
 
         If escrow is enabled and the blocked spend exceeds
         ``auto_escalate_above``, the transaction is held for human review.
+
+        Friction verdicts are ALLOWED — the transaction can proceed,
+        but the integration layer injects a Semantic Revert into the
+        LLM context, forcing System 2 reasoning before execution.
         """
 
         # ── ZERO-DAY 4: Cognitive Starvation — check sever state ──
-        # If the agent has been cognitively severed, block ALL actions
-        # until the sever expires. This prevents infinite retry loops
-        # from burning cloud compute / API credits.
         if self._cognitive_severed:
             now = time.time()
             if now < self._sever_until:
@@ -197,14 +211,11 @@ class PlimsollFirewall:
                     },
                 ))
             else:
-                # Sever has expired — resume normal operation
                 self._cognitive_severed = False
                 self._strike_timestamps.clear()
                 logger.info("ZERO-DAY 4: Cognitive sever expired — resuming")
 
-        # ── ZERO-DAY 4 (v1.0.2): Paymaster Slashing — check sever state ──
-        # If too many post-simulation reverts detected, block ALL actions
-        # to stop gas griefing against the Enterprise Paymaster.
+        # ── ZERO-DAY 4 (v1.0.2): Paymaster Slashing ──────────────
         if self._paymaster_severed:
             return self._record(Verdict(
                 code=VerdictCode.BLOCK_PAYMASTER_SEVERED,
@@ -220,43 +231,81 @@ class PlimsollFirewall:
                 },
             ))
 
-        # Engine 0: Threat Feed — is target globally blacklisted?
+        # Accumulate friction signals from Pillar 2 engines.
+        # Multiple friction signals strengthen the case for caution
+        # but do NOT block. The highest-severity friction is returned.
+        friction_signals: list[Verdict] = []
+
+        # Engine 0: Threat Feed (Pillar 3 — A2A consensus blacklist)
         v = self._threat_feed.evaluate(payload)
         if v.blocked:
             return self._maybe_escrow(v, payload, spend_amount)
 
-        # Engine 1: Trajectory Hash — are we in a retry loop?
+        # Engine 1: Trajectory Hash (Pillar 2 — danger signal)
         v = self._trajectory.evaluate(payload)
         if v.blocked:
             return self._maybe_escrow(v, payload, spend_amount)
+        if v.friction:
+            friction_signals.append(v)
 
-        # Engine 2: Capital Velocity — is spend velocity spiking?
+        # Engine 2: Capital Velocity (Pillar 1 hard cap + Pillar 2 PID + GTV)
         if spend_amount > 0:
-            v = self._velocity.evaluate(spend_amount)
+            v = self._velocity.evaluate(spend_amount, payload=payload)
             if v.blocked:
                 return self._maybe_escrow(v, payload, spend_amount)
+            if v.friction:
+                friction_signals.append(v)
 
-        # Engine 3: Entropy Guard — is the payload leaking secrets?
+        # Engine 3: Entropy Guard (Pillar 1 secrets + Pillar 2 anomalies)
         v = self._entropy.evaluate(payload)
         if v.blocked:
             return self._maybe_escrow(v, payload, spend_amount)
+        if v.friction:
+            friction_signals.append(v)
 
-        # Engine 4: Asset Guard — is this a bad swap?
+        # Engine 4: Asset Guard (Pillar 2 — oracle-backed checks)
         v = self._asset_guard.evaluate(payload)
         if v.blocked:
             return self._maybe_escrow(v, payload, spend_amount)
 
-        # Engine 5: Payload Quantizer — steganography in amounts?
+        # Engine 5: Payload Quantizer (Pillar 2 — steganography)
         v = self._quantizer.evaluate(payload)
         if v.blocked:
             return self._maybe_escrow(v, payload, spend_amount)
 
-        # Engine 6: EVM Simulator — does the tx outcome look safe?
+        # Engine 6: EVM Simulator (Pillar 2 — simulated danger)
         v = self._simulator.evaluate(payload)
         if v.blocked:
             return self._maybe_escrow(v, payload, spend_amount)
+        if v.friction:
+            friction_signals.append(v)
 
-        # All clear
+        # ── Friction Accumulation ─────────────────────────────────
+        # If any Pillar 2 engine raised a danger signal, return the
+        # highest-severity friction verdict. The transaction IS allowed
+        # but the integration layer MUST inject the feedback prompt
+        # into the LLM context before proceeding.
+        if friction_signals:
+            # Return the friction with highest deviation %
+            worst = max(
+                friction_signals,
+                key=lambda f: f.metadata.get("deviation_pct", 0),
+            )
+            # Enrich metadata with all accumulated signals
+            combined_meta = dict(worst.metadata)
+            combined_meta["friction_signal_count"] = len(friction_signals)
+            combined_meta["all_signals"] = [
+                {"engine": f.engine, "code": f.code.value, "reason": f.reason}
+                for f in friction_signals
+            ]
+            return self._record(Verdict(
+                code=worst.code,
+                reason=worst.reason,
+                engine=worst.engine,
+                metadata=combined_meta,
+            ))
+
+        # All clear — no blocks, no friction
         return self._record(
             Verdict(
                 code=VerdictCode.ALLOW,
@@ -463,7 +512,16 @@ class PlimsollFirewall:
     # ── Recording & stats ────────────────────────────────────────
 
     def _record(self, verdict: Verdict) -> Verdict:
-        """Record verdict in history and invoke callbacks."""
+        """Record verdict in history and invoke callbacks.
+
+        Three-Pillar Routing:
+            - Friction (Pillar 2): Counted as ALLOWED (with friction).
+              Does NOT trigger cognitive starvation strikes.
+              Logged at INFO level, not WARNING.
+            - Block (Pillar 1/3): Counted as BLOCKED.
+              Triggers cognitive starvation strike counter.
+            - Escrow: Counted separately.
+        """
         now = time.time()
         self._history.append((now, verdict))
 
@@ -472,23 +530,44 @@ class PlimsollFirewall:
             logger.info("PLIMSOLL ESCROW: %s", verdict.reason)
             if self.config.on_block:
                 self.config.on_block(verdict)
+        elif verdict.friction:
+            # ── Pillar 2: Friction — allowed with cognitive challenge ──
+            # Friction verdicts are ALLOWED. They do NOT count as blocks
+            # and do NOT trigger cognitive starvation. The integration
+            # layer is responsible for injecting the feedback prompt.
+            self._allowed_count += 1
+            signal_count = verdict.metadata.get("friction_signal_count", 1)
+            logger.info(
+                "PLIMSOLL FRICTION [%d signal(s)]: %s",
+                signal_count, verdict.reason,
+            )
         elif verdict.blocked:
             self._blocked_count += 1
+            # Track per-engine block counts and recent events
+            self._per_engine_blocks[verdict.engine] += 1
+            self._recent_blocks.append({
+                "timestamp": now,
+                "engine": verdict.engine,
+                "code": verdict.code.value,
+                "reason": verdict.reason[:120],
+                "target": "",  # Populated by evaluate() callers if available
+            })
             logger.warning("PLIMSOLL BLOCK: %s", verdict.reason)
             if self.config.on_block:
                 self.config.on_block(verdict)
 
             # ── ZERO-DAY 4: Cognitive Starvation — record strike ──
+            # Only HARD BLOCKS (Pillar 1/3) count as strikes.
+            # Friction (Pillar 2) does not — because friction is the
+            # system working correctly, not the agent misbehaving.
             if self.config.cognitive_sever_enabled:
                 self._strike_timestamps.append(now)
-                # Prune timestamps outside the rolling window
                 cutoff = now - self.config.strike_window_secs
                 while (
                     self._strike_timestamps
                     and self._strike_timestamps[0] < cutoff
                 ):
                     self._strike_timestamps.popleft()
-                # Check if strike count exceeds threshold
                 if len(self._strike_timestamps) >= self.config.strike_max:
                     self._cognitive_severed = True
                     self._sever_until = now + self.config.sever_duration_secs
@@ -499,7 +578,6 @@ class PlimsollFirewall:
                         self.config.strike_window_secs,
                         self.config.sever_duration_secs,
                     )
-                    # Fire webhook callback (exception-safe)
                     if self.config.on_cognitive_sever:
                         try:
                             self.config.on_cognitive_sever()
@@ -520,6 +598,25 @@ class PlimsollFirewall:
             "escrowed": self._escrowed_count,
             "total": self._allowed_count + self._blocked_count + self._escrowed_count,
         }
+
+    @property
+    def engine_stats(self) -> list[dict[str, Any]]:
+        """Per-engine block counts for the dashboard API."""
+        engine_names = [
+            "ThreatFeed", "TrajectoryHash", "CapitalVelocity",
+            "EntropyGuard", "AssetGuard", "PayloadQuantizer",
+            "EVMSimulator", "CognitiveSever", "PaymasterSever",
+        ]
+        return [
+            {"name": name, "blocks": self._per_engine_blocks.get(name, 0)}
+            for name in engine_names
+            if self._per_engine_blocks.get(name, 0) > 0 or name in engine_names[:7]
+        ]
+
+    @property
+    def recent_blocks(self) -> list[dict[str, Any]]:
+        """Recent block events (last 50) for the dashboard API."""
+        return list(self._recent_blocks)
 
     @property
     def threat_feed(self) -> ThreatFeedEngine:
@@ -547,3 +644,6 @@ class PlimsollFirewall:
         # ZERO-DAY 4 (v1.0.2): Reset paymaster sever state
         self._revert_timestamps.clear()
         self._paymaster_severed = False
+        # Reset per-engine stats
+        self._per_engine_blocks.clear()
+        self._recent_blocks.clear()

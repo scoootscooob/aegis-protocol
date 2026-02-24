@@ -156,13 +156,17 @@ class CapitalVelocityEngine:
         # Per-transaction GTV check
         per_tx_ratio = gas_cost / max(value_moved, eps)
         if per_tx_ratio > self.config.gtv_max_ratio:
+            # ── Pillar 2: Cognitive Friction ───────────────────────
+            # High gas-to-value ratio is a danger signal, not a physics
+            # violation. The agent might have a legitimate reason (e.g.,
+            # complex multi-hop swap with high gas but important position).
             return Verdict(
-                code=VerdictCode.BLOCK_GAS_VALUE_RATIO,
+                code=VerdictCode.FRICTION_GAS_VALUE_ANOMALY,
                 reason=(
-                    f"GOD-TIER 4 (PAYMASTER PARASITE): Per-tx GTV ratio "
+                    f"DANGER SIGNAL: Per-tx GTV ratio "
                     f"{per_tx_ratio:.1f}x > max {self.config.gtv_max_ratio:.1f}x. "
                     f"Gas ${gas_cost:.2f} for ${value_moved:.2f} value — "
-                    f"Irrational Economic Sabotage detected"
+                    f"justify this gas expenditure"
                 ),
                 engine=_ENGINE_NAME,
                 metadata={
@@ -170,6 +174,7 @@ class CapitalVelocityEngine:
                     "gas_cost": gas_cost,
                     "value_moved": value_moved,
                     "max_ratio": self.config.gtv_max_ratio,
+                    "deviation_pct": round((per_tx_ratio / self.config.gtv_max_ratio - 1) * 100, 1),
                 },
             )
 
@@ -283,8 +288,17 @@ class CapitalVelocityEngine:
 
     # ── Main evaluation ──────────────────────────────────────────
 
-    def evaluate(self, amount: float) -> Verdict:
-        """Evaluate a proposed spend of `amount` units."""
+    def evaluate(self, amount: float, payload: dict | None = None) -> Verdict:
+        """Evaluate a proposed spend of `amount` units.
+
+        Parameters
+        ----------
+        amount : float
+            The spend amount in native units.
+        payload : dict, optional
+            The full normalized payload. Used for GTV ratio checks
+            when ``gtv_enabled`` is True.
+        """
         now = time.monotonic()
         self._prune(now)
 
@@ -296,6 +310,27 @@ class CapitalVelocityEngine:
                 engine=_ENGINE_NAME,
                 metadata={"dead_man_locked": True},
             )
+
+        # ── GOD-TIER 4: GTV Ratio Check (Paymaster Parasite Defense) ──
+        # Must run before recording the spend so that blocked txs don't
+        # pollute the GTV window. Uses gas cost from payload if available.
+        if self.config.gtv_enabled and payload:
+            gas_str = payload.get("gas", "") or payload.get("gasPrice", "")
+            gas_cost = 0.0
+            if gas_str:
+                try:
+                    if isinstance(gas_str, str) and gas_str.startswith("0x"):
+                        gas_cost = int(gas_str, 16) / 1e18
+                    else:
+                        gas_cost = float(gas_str)
+                except (ValueError, TypeError):
+                    pass
+            # Only apply GTV check if there's a gas cost estimate and
+            # value is below the minimum threshold (small tx gas drain)
+            if gas_cost > 0 and (amount <= self.config.gtv_min_value or amount > 0):
+                gtv_verdict = self.check_gtv(gas_cost, amount)
+                if gtv_verdict is not None:
+                    return gtv_verdict
 
         # Hard cap check
         if amount > self.config.max_single_amount:
@@ -334,9 +369,11 @@ class CapitalVelocityEngine:
         pid_details["effective_v_max"] = round(effective_v_max, 4)
 
         if pid_output > self.config.pid_threshold:
-            # Rollback the spend record since we're blocking
-            self._records.pop()
-            self._total_spent -= amount
+            # Compute deviation percentage for cognitive friction
+            deviation_pct = round(
+                ((velocity / max(self.config.v_max, 1e-18)) - 1.0) * 100, 1
+            )
+            pid_details["deviation_pct"] = deviation_pct
 
             # Check if this is a jitter-specific catch:
             # Would this have passed under nominal (non-jittered) v_max?
@@ -352,26 +389,47 @@ class CapitalVelocityEngine:
                     self._dead_man_locked = True
                     pid_details["dead_man_triggered"] = True
 
+                # ── Pillar 2: Cognitive Friction ───────────────────
+                # Jitter catch = borderline anomaly. Inject friction,
+                # don't block. Force System 2 reasoning.
+                # NOTE: spend IS recorded — the tx is allowed but with
+                # friction. The LLM must justify the action.
                 return Verdict(
-                    code=VerdictCode.BLOCK_VELOCITY_JITTER,
+                    code=VerdictCode.FRICTION_VELOCITY_JITTER,
                     reason=(
-                        f"JITTER CATCH: PID output {pid_output:.2f} > "
+                        f"DANGER SIGNAL: PID output {pid_output:.2f} > "
                         f"threshold {self.config.pid_threshold} "
                         f"(effective v_max {effective_v_max:.2f}, "
                         f"jitter {jitter_factor:+.4f}). "
-                        f"Attacker probing near threshold boundary"
+                        f"Spend velocity near threshold boundary"
                     ),
                     engine=_ENGINE_NAME,
                     metadata=pid_details,
                 )
 
+            # ── Pillar 2: Cognitive Friction ───────────────────────
+            # Velocity spike above baseline. This is a DANGER SIGNAL
+            # (Matzinger Danger Theory), not a physics violation.
+            # The transaction is ALLOWED but with friction injected.
+            # The LLM must articulate coherent reasoning before the
+            # integration layer proceeds with execution.
+            #
+            # Why friction, not block?
+            #   - Alpha is surprise. A flash-loan arb 100x the baseline
+            #     looks identical to a drain from a surprise metric.
+            #   - Blocking on surprise kills alpha.
+            #   - Friction forces the LLM to reason. If it's been
+            #     injected, the reasoning will be incoherent.
+            #   - If it's genuine alpha, the reasoning will be sound.
+            # NOTE: spend IS recorded — the tx is allowed.
             return Verdict(
-                code=VerdictCode.BLOCK_VELOCITY_BREACH,
+                code=VerdictCode.FRICTION_VELOCITY_ANOMALY,
                 reason=(
-                    f"VELOCITY BREACH: PID output {pid_output:.2f} > "
-                    f"threshold {self.config.pid_threshold}. "
-                    f"Spend velocity {velocity:.2f} units/s exceeds "
-                    f"v_max {self.config.v_max} units/s"
+                    f"DANGER SIGNAL: Spend velocity {velocity:.2f} units/s "
+                    f"is {deviation_pct}% above baseline v_max "
+                    f"{self.config.v_max} units/s. "
+                    f"PID output {pid_output:.2f} > threshold "
+                    f"{self.config.pid_threshold}"
                 ),
                 engine=_ENGINE_NAME,
                 metadata=pid_details,

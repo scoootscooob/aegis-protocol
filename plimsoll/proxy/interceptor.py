@@ -5,7 +5,7 @@ A lightweight ASGI proxy (Starlette) that sits between agents and the
 blockchain. Agents point their RPC URL at Plimsoll instead of directly
 at Alchemy/Infura.
 
-Two modes:
+Three modes:
 
 1. **Global** (``POST /``): All traffic filtered through a single firewall
    with default config. Good for single-agent setups.
@@ -13,6 +13,8 @@ Two modes:
 2. **Vault-aware** (``POST /v1/{vault_address}``): Each vault gets its own
    firewall configured from on-chain parameters. The agent just changes its
    RPC URL and gets protection — zero code changes.
+
+3. **API** (``GET /api/*``): Dashboard endpoints for live monitoring.
 
 Deploy as::
 
@@ -26,16 +28,23 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any
 
 import httpx
 from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from plimsoll.firewall import PlimsollFirewall, PlimsollConfig
+from plimsoll.engines.threat_feed import ThreatFeedConfig
+from plimsoll.engines.capital_velocity import CapitalVelocityConfig
+from plimsoll.engines.payload_quantizer import PayloadQuantizerConfig
+from plimsoll.engines.evm_simulator import EVMSimulatorConfig
 from plimsoll.proxy.vault_config import VaultConfigCache
+from plimsoll.proxy.threat_seed import seed_threat_feed
 
 logger = logging.getLogger("plimsoll.proxy")
 
@@ -44,9 +53,69 @@ logger = logging.getLogger("plimsoll.proxy")
 _firewall: PlimsollFirewall | None = None
 _upstream_url: str = ""
 _vault_cache: VaultConfigCache | None = None
+_boot_time: float = 0.0
 
 # Per-vault firewall instances (lazy-created, keyed by vault address)
 _vault_firewalls: dict[str, PlimsollFirewall] = {}
+
+
+# ── Full Production Config ────────────────────────────────────
+
+def _production_config() -> PlimsollConfig:
+    """Build the fully-activated Plimsoll config.
+
+    Enables all features that don't require external services:
+    - Engine 0: ThreatFeed (seeded with curated blacklist)
+    - Engine 2: GTV ratio caps (paymaster parasite defense)
+    - Engine 5: Payload Quantizer (steganography destruction)
+    - Engine 6: EVM Simulator (fail-open, blocked_contracts + approval friction)
+    - Cognitive Sever: Auto-lockout after 5 blocks in 10 min
+    - Paymaster Slashing: Auto-revoke after 10 reverts in 5 min
+    - Gas Anomaly Detection: Alert if actual > 3x simulated
+    - PVG Ceiling: Max preVerificationGas 500,000
+    - Chain ID: Base = 8453
+    """
+    return PlimsollConfig(
+        # Engine 0: Threat Feed — seeded on startup
+        threat_feed=ThreatFeedConfig(enabled=True),
+
+        # Engine 2: Capital Velocity + GTV Ratio
+        velocity=CapitalVelocityConfig(
+            v_max=100.0,
+            window_seconds=300.0,
+            max_single_amount=50.0,
+            gtv_enabled=True,
+            gtv_max_ratio=5.0,
+            gtv_min_value=0.001,
+            gtv_window_seconds=300.0,
+            gtv_cumulative_max=10.0,
+        ),
+
+        # Engine 5: Payload Quantizer (steganography destruction)
+        quantizer=PayloadQuantizerConfig(enabled=True),
+
+        # Engine 6: EVM Simulator (fail-open — allows when no simulator present)
+        simulator=EVMSimulatorConfig(enabled=True, fail_closed=False),
+
+        # Cognitive Sever: 5 strikes in 10 min → 15 min lockout
+        cognitive_sever_enabled=True,
+        strike_max=5,
+        strike_window_secs=600.0,
+        sever_duration_secs=900.0,
+
+        # Paymaster Slashing: 10 reverts in 5 min → permanent sever
+        revert_strike_max=10,
+        revert_strike_window_secs=300.0,
+
+        # Gas Anomaly: actual > 3x simulated → strike
+        gas_anomaly_ratio=3.0,
+
+        # PVG Ceiling (ERC-4337)
+        max_pre_verification_gas=500_000,
+
+        # Chain ID: Base = 8453
+        chain_id=8453,
+    )
 
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -200,6 +269,18 @@ def _whitelist_block_response(destination: str, reason: str) -> JSONResponse:
     )
 
 
+def _seed_firewall(firewall: PlimsollFirewall) -> None:
+    """Seed a firewall's Engine 0 with curated threat data."""
+    seed_threat_feed(firewall.threat_feed)
+    logger.info(
+        "Seeded Engine 0: %d entries (%d addresses, %d selectors, %d hashes)",
+        firewall.threat_feed.size,
+        len(firewall.threat_feed._addresses),
+        len(firewall.threat_feed._selectors),
+        len(firewall.threat_feed._calldata_hashes),
+    )
+
+
 # ── Route Handlers ───────────────────────────────────────────
 
 async def _handle_rpc(request: Request) -> JSONResponse:
@@ -304,14 +385,30 @@ async def _get_vault_firewall(vault_address: str) -> PlimsollFirewall:
     if _vault_cache:
         config = await _vault_cache.get(vault_address)
     else:
-        config = PlimsollConfig()
+        config = _production_config()
+
+    # Enable production features on per-vault firewalls too
+    config.threat_feed.enabled = True
+    config.cognitive_sever_enabled = True
+    config.strike_max = 5
+    config.strike_window_secs = 600.0
+    config.revert_strike_max = 10
+    config.gas_anomaly_ratio = 3.0
+    config.max_pre_verification_gas = 500_000
+    config.chain_id = 8453
 
     firewall = PlimsollFirewall(config=config)
+
+    # Seed Engine 0 for this vault's firewall too
+    _seed_firewall(firewall)
+
     _vault_firewalls[key] = firewall
-    logger.info("Created firewall for vault %s", vault_address[:10])
+    logger.info("Created firewall for vault %s (all engines active)", vault_address[:10])
 
     return firewall
 
+
+# ── Health / API Endpoints ───────────────────────────────────
 
 async def _health(request: Request) -> JSONResponse:
     """Health check endpoint."""
@@ -338,7 +435,124 @@ async def _health(request: Request) -> JSONResponse:
         "upstream": _upstream_url,
         "engines": 7,
         "protection": "normalizer + whitelist_gate + 7_engine_firewall",
+        "uptime_secs": round(time.time() - _boot_time, 1) if _boot_time else 0,
         "stats": stats,
+    })
+
+
+async def _api_threat_feed(request: Request) -> JSONResponse:
+    """GET /api/threat-feed — Threat feed stats + recent blocks.
+
+    Returns Engine 0 status, blacklist counts, immune protocol count,
+    and recent block events from the global firewall.
+    """
+    if not _firewall:
+        return JSONResponse({"error": "Firewall not initialized"}, status_code=503)
+
+    tf = _firewall.threat_feed
+    recent = _firewall.recent_blocks if hasattr(_firewall, "recent_blocks") else []
+
+    return JSONResponse({
+        "enabled": tf.config.enabled,
+        "stats": tf.stats,
+        "immune_protocols": len(tf._addresses & set()) + 9,  # 9 built-in
+        "recent_blocks": list(recent),
+        "uptime_secs": round(time.time() - _boot_time, 1) if _boot_time else 0,
+    })
+
+
+async def _api_engines(request: Request) -> JSONResponse:
+    """GET /api/engines — All 7 engine statuses + active features.
+
+    Returns per-engine info (name, ID, enabled, block count) and
+    a summary of all enabled defense features.
+    """
+    if not _firewall:
+        return JSONResponse({"error": "Firewall not initialized"}, status_code=503)
+
+    cfg = _firewall.config
+    engine_stats = _firewall.engine_stats if hasattr(_firewall, "engine_stats") else []
+
+    # Build engine list
+    engines = [
+        {
+            "name": "ThreatFeed",
+            "id": 0,
+            "enabled": cfg.threat_feed.enabled,
+            "entries": _firewall.threat_feed.size,
+            "blocks": _firewall.threat_feed._block_count,
+        },
+        {
+            "name": "TrajectoryHash",
+            "id": 1,
+            "enabled": True,  # Always enabled
+            "blocks": next((e.get("blocks", 0) for e in engine_stats if e.get("name") == "TrajectoryHash"), 0),
+        },
+        {
+            "name": "CapitalVelocity",
+            "id": 2,
+            "enabled": True,  # Always enabled
+            "gtv_enabled": cfg.velocity.gtv_enabled,
+            "blocks": next((e.get("blocks", 0) for e in engine_stats if e.get("name") == "CapitalVelocity"), 0),
+        },
+        {
+            "name": "EntropyGuard",
+            "id": 3,
+            "enabled": True,  # Always enabled
+            "blocks": next((e.get("blocks", 0) for e in engine_stats if e.get("name") == "EntropyGuard"), 0),
+        },
+        {
+            "name": "AssetGuard",
+            "id": 4,
+            "enabled": True,  # Always enabled
+            "blocks": next((e.get("blocks", 0) for e in engine_stats if e.get("name") == "AssetGuard"), 0),
+        },
+        {
+            "name": "PayloadQuantizer",
+            "id": 5,
+            "enabled": cfg.quantizer.enabled,
+            "blocks": next((e.get("blocks", 0) for e in engine_stats if e.get("name") == "PayloadQuantizer"), 0),
+        },
+        {
+            "name": "EVMSimulator",
+            "id": 6,
+            "enabled": cfg.simulator.enabled,
+            "fail_closed": cfg.simulator.fail_closed,
+            "blocks": next((e.get("blocks", 0) for e in engine_stats if e.get("name") == "EVMSimulator"), 0),
+        },
+    ]
+
+    features = {
+        "cognitive_sever": cfg.cognitive_sever_enabled,
+        "cognitive_sever_config": (
+            f"{cfg.strike_max} strikes / {int(cfg.strike_window_secs)}s window"
+            if cfg.cognitive_sever_enabled else "disabled"
+        ),
+        "paymaster_defense": cfg.revert_strike_max > 0,
+        "paymaster_config": (
+            f"{cfg.revert_strike_max} reverts / {int(cfg.revert_strike_window_secs)}s window"
+            if cfg.revert_strike_max > 0 else "disabled"
+        ),
+        "gtv_ratio": cfg.velocity.gtv_enabled,
+        "gtv_max_ratio": cfg.velocity.gtv_max_ratio,
+        "gas_anomaly": cfg.gas_anomaly_ratio > 0,
+        "gas_anomaly_ratio": cfg.gas_anomaly_ratio,
+        "pvg_ceiling": cfg.max_pre_verification_gas > 0,
+        "pvg_max": cfg.max_pre_verification_gas,
+        "chain_id": cfg.chain_id,
+        "whitelist_gate": True,
+    }
+
+    return JSONResponse({
+        "engines": engines,
+        "features": features,
+        "total_evaluations": _firewall.stats.get("total", 0),
+        "total_blocks": _firewall.stats.get("blocked", 0),
+        "engine_block_counts": engine_stats,
+        "recent_blocks": list(
+            _firewall.recent_blocks if hasattr(_firewall, "recent_blocks") else []
+        ),
+        "uptime_secs": round(time.time() - _boot_time, 1) if _boot_time else 0,
     })
 
 
@@ -350,25 +564,52 @@ def create_proxy_app(
 ) -> Starlette:
     """Create a configured Starlette ASGI app acting as the Plimsoll proxy.
 
-    The app serves two route families:
+    The app serves three route families:
 
     - ``POST /`` — Global firewall (backward compatible)
     - ``POST /v1/{vault_address}`` — Per-vault firewall from on-chain config
     - ``GET /health`` — Health check
+    - ``GET /api/threat-feed`` — Threat feed dashboard data
+    - ``GET /api/engines`` — All 7 engine statuses
     """
-    global _firewall, _upstream_url, _vault_cache
+    global _firewall, _upstream_url, _vault_cache, _boot_time
 
     _upstream_url = upstream_url
-    _firewall = PlimsollFirewall(config=config or PlimsollConfig())
+    _boot_time = time.time()
+
+    # Use production config with all features enabled
+    active_config = config or _production_config()
+    _firewall = PlimsollFirewall(config=active_config)
+
+    # Seed Engine 0 with curated blacklist data
+    _seed_firewall(_firewall)
+
     _vault_cache = VaultConfigCache(rpc_url=upstream_url)
 
-    return Starlette(
+    logger.info(
+        "Plimsoll proxy started — all engines active, %d threat entries seeded",
+        _firewall.threat_feed.size,
+    )
+
+    app = Starlette(
         routes=[
             Route("/", _handle_rpc, methods=["POST"]),
             Route("/v1/{vault_address}", _handle_vault_rpc, methods=["POST"]),
             Route("/health", _health, methods=["GET"]),
+            Route("/api/threat-feed", _api_threat_feed, methods=["GET"]),
+            Route("/api/engines", _api_engines, methods=["GET"]),
         ],
     )
+
+    # Add CORS middleware for dashboard access
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
+
+    return app
 
 
 # Default app for `uvicorn plimsoll.proxy.interceptor:app`

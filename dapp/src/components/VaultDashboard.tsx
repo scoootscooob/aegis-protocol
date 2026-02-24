@@ -18,6 +18,7 @@ import { ModuleStatus } from "./ModuleStatus";
 import { DeployVault } from "./DeployVault";
 import { QuickDeploy } from "./QuickDeploy";
 import { VaultConfig } from "./VaultConfig";
+import { ThreatFeed } from "./ThreatFeed";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
 
@@ -144,6 +145,9 @@ export function VaultDashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Global Threat Feed — visible to ALL users */}
+      <ThreatFeed />
+
       {/* Deploy New Vault (advanced — for users who already have vaults) */}
       <DeployVault
         onVaultCreated={(addr) => {
