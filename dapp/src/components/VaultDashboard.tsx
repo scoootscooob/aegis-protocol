@@ -215,7 +215,7 @@ export function VaultDashboard() {
             <div className="border-r border-b border-ink/20 p-6">
               <div className="stat-label">Vault Balance</div>
               <div className="stat-value mt-2">
-                {balance.data
+                {balance.data != null
                   ? `${parseFloat(formatEther(balance.data as bigint)).toFixed(4)} ETH`
                   : "Loading..."}
               </div>
@@ -223,9 +223,9 @@ export function VaultDashboard() {
             <div className="border-r border-b border-ink/20 p-6">
               <div className="stat-label">Initial Deposit</div>
               <div className="stat-value mt-2">
-                {initialBal.data
+                {initialBal.data != null
                   ? `${parseFloat(formatEther(initialBal.data as bigint)).toFixed(4)} ETH`
-                  : "0 ETH"}
+                  : "Loading..."}
               </div>
             </div>
             <div className="border-r border-b border-ink/20 p-6">
