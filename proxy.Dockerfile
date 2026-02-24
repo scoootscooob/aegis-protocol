@@ -17,13 +17,12 @@ COPY plimsoll/ plimsoll/
 RUN pip install --no-cache-dir ".[proxy]"
 
 # Environment defaults
+# Railway assigns PORT dynamically; fall back to 8545 for local dev
 ENV PLIMSOLL_UPSTREAM_RPC=https://mainnet.base.org \
     PLIMSOLL_HOST=0.0.0.0 \
-    PLIMSOLL_PORT=8545
+    PORT=8545
 
 EXPOSE 8545
 
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8545/health', timeout=3)" || exit 1
-
-CMD ["uvicorn", "plimsoll.proxy.interceptor:app", "--host", "0.0.0.0", "--port", "8545"]
+# Use shell form so $PORT is expanded at runtime
+CMD uvicorn plimsoll.proxy.interceptor:app --host 0.0.0.0 --port $PORT
