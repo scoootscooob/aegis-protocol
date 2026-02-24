@@ -6,7 +6,13 @@
 
 import { useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { parseEther, formatEther, type Address } from "viem";
-import { PLIMSOLL_VAULT_ABI, PLIMSOLL_ATTESTATION_ABI, CONTRACTS } from "@/lib/contracts";
+import {
+  PLIMSOLL_VAULT_ABI,
+  PLIMSOLL_ATTESTATION_ABI,
+  VELOCITY_MODULE_ABI,
+  DRAWDOWN_MODULE_ABI,
+  CONTRACTS,
+} from "@/lib/contracts";
 
 // ── Read Hooks ───────────────────────────────────────────────
 
@@ -177,6 +183,74 @@ export function useEmergencyLock() {
   };
 
   return { lock, unlock, hash, isPending, isConfirming, isSuccess, error };
+}
+
+// ── Module Config Read Hooks ─────────────────────────────────
+
+export function useVelocityConfig(moduleAddress: Address) {
+  const maxPerHour = useReadContract({
+    address: moduleAddress,
+    abi: VELOCITY_MODULE_ABI,
+    functionName: "maxPerHour",
+  });
+  const maxSingleTx = useReadContract({
+    address: moduleAddress,
+    abi: VELOCITY_MODULE_ABI,
+    functionName: "maxSingleTx",
+  });
+  const windowSeconds = useReadContract({
+    address: moduleAddress,
+    abi: VELOCITY_MODULE_ABI,
+    functionName: "windowSeconds",
+  });
+  return { maxPerHour, maxSingleTx, windowSeconds };
+}
+
+export function useDrawdownConfig(moduleAddress: Address) {
+  return useReadContract({
+    address: moduleAddress,
+    abi: DRAWDOWN_MODULE_ABI,
+    functionName: "maxDrawdownBps",
+  });
+}
+
+// ── Module Config Write Hooks ────────────────────────────────
+
+export function useConfigureVelocity() {
+  const { writeContract, data: hash, isPending, error } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+
+  const configure = (
+    moduleAddress: Address,
+    maxPerHourEth: string,
+    maxSingleTxEth: string,
+    windowSeconds: number = 3600
+  ) => {
+    writeContract({
+      address: moduleAddress,
+      abi: VELOCITY_MODULE_ABI,
+      functionName: "configure",
+      args: [parseEther(maxPerHourEth), parseEther(maxSingleTxEth), BigInt(windowSeconds)],
+    });
+  };
+
+  return { configure, hash, isPending, isConfirming, isSuccess, error };
+}
+
+export function useConfigureDrawdown() {
+  const { writeContract, data: hash, isPending, error } = useWriteContract();
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+
+  const configure = (moduleAddress: Address, maxDrawdownBps: number) => {
+    writeContract({
+      address: moduleAddress,
+      abi: DRAWDOWN_MODULE_ABI,
+      functionName: "configure",
+      args: [BigInt(maxDrawdownBps)],
+    });
+  };
+
+  return { configure, hash, isPending, isConfirming, isSuccess, error };
 }
 
 // ── Attestation Hooks ────────────────────────────────────────

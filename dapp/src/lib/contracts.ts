@@ -339,6 +339,76 @@ export const PLIMSOLL_FACTORY_ABI = [
   },
 ] as const;
 
+// ── VelocityLimitModule ABI ───────────────────────────────────
+
+export const VELOCITY_MODULE_ABI = [
+  {
+    name: "configure",
+    type: "function",
+    inputs: [
+      { name: "maxPerHour_", type: "uint256" },
+      { name: "maxSingleTx_", type: "uint256" },
+      { name: "windowSeconds_", type: "uint256" },
+    ],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    name: "maxPerHour",
+    type: "function",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    name: "maxSingleTx",
+    type: "function",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    name: "windowSeconds",
+    type: "function",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    name: "owner",
+    type: "function",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+  },
+] as const;
+
+// ── DrawdownGuardModule ABI ──────────────────────────────────
+
+export const DRAWDOWN_MODULE_ABI = [
+  {
+    name: "configure",
+    type: "function",
+    inputs: [{ name: "maxDrawdownBps_", type: "uint256" }],
+    outputs: [],
+    stateMutability: "nonpayable",
+  },
+  {
+    name: "maxDrawdownBps",
+    type: "function",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    name: "owner",
+    type: "function",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+  },
+] as const;
+
 // ── Contract Addresses (update after deployment) ─────────────
 
 export const CONTRACTS = {

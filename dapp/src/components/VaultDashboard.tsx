@@ -17,6 +17,7 @@ import { EmergencyPanel } from "./EmergencyPanel";
 import { ModuleStatus } from "./ModuleStatus";
 import { DeployVault } from "./DeployVault";
 import { QuickDeploy } from "./QuickDeploy";
+import { VaultConfig } from "./VaultConfig";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
 
@@ -263,6 +264,9 @@ export function VaultDashboard() {
               <SessionKeyManager vaultAddress={activeVault} />
             </div>
           )}
+
+          {/* Vault Configuration (owner only) */}
+          {isOwner && <VaultConfig vaultAddress={activeVault} />}
 
           {/* Emergency Panel */}
           {isOwner && (
