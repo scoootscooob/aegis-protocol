@@ -342,6 +342,14 @@ export const PLIMSOLL_FACTORY_ABI = [
 // ── Contract Addresses (update after deployment) ─────────────
 
 export const CONTRACTS = {
+  base: {
+    vault: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+    velocityModule: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+    whitelistModule: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+    drawdownModule: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+    attestation: "0x0000000000000000000000000000000000000000" as `0x${string}`,
+    factory: "0xc41Caea326E0F8C69613d9576E75e62670EEb663" as `0x${string}`,
+  },
   sepolia: {
     vault: "0x0000000000000000000000000000000000000000" as `0x${string}`,
     velocityModule: "0x0000000000000000000000000000000000000000" as `0x${string}`,

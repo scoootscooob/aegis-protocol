@@ -8,7 +8,7 @@ import { useReadContract, useWriteContract, useWaitForTransactionReceipt } from 
 import { parseEther, type Address } from "viem";
 import { PLIMSOLL_FACTORY_ABI, PLIMSOLL_VAULT_ABI, CONTRACTS } from "@/lib/contracts";
 
-const FACTORY_ADDRESS = CONTRACTS.sepolia.factory as Address;
+const FACTORY_ADDRESS = CONTRACTS.base.factory as Address;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 export const isFactoryDeployed = FACTORY_ADDRESS !== ZERO_ADDRESS;
 

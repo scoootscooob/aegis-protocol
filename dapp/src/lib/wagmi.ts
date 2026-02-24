@@ -1,29 +1,29 @@
 /**
  * Wagmi + ConnectKit configuration for Plimsoll dApp.
  *
- * Family wallet is disabled while the dApp is on Sepolia testnet.
- * Family only supports mainnet + L2s (Optimism, Base, Arbitrum, Polygon, zkSync).
- * Re-enable when deploying to mainnet.
+ * Primary chain: Base (8453) — where vaults are deployed.
+ * Sepolia kept for testing.
  */
 
 import { getDefaultConfig } from "connectkit";
 import { createConfig, http } from "wagmi";
-import { sepolia, mainnet } from "wagmi/chains";
-
-// Family wallet doesn't support testnets — only enable on mainnet
-const isTestnetOnly = !process.env.NEXT_PUBLIC_MAINNET_RPC_URL;
+import { base, sepolia, mainnet } from "wagmi/chains";
 
 export const config = createConfig(
   getDefaultConfig({
-    chains: [sepolia, mainnet],
+    chains: [base, mainnet, sepolia],
     transports: {
-      [sepolia.id]: http(
-        process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ||
-          "https://rpc.sepolia.org"
+      [base.id]: http(
+        process.env.NEXT_PUBLIC_BASE_RPC_URL ||
+          "https://mainnet.base.org"
       ),
       [mainnet.id]: http(
         process.env.NEXT_PUBLIC_MAINNET_RPC_URL ||
           "https://cloudflare-eth.com"
+      ),
+      [sepolia.id]: http(
+        process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ||
+          "https://rpc.sepolia.org"
       ),
     },
     walletConnectProjectId:
@@ -31,6 +31,6 @@ export const config = createConfig(
     appName: "Plimsoll Capital Delegation",
     appDescription: "Manage AI agent vaults with on-chain physics enforcement",
     appUrl: "https://plimsoll.network",
-    enableFamily: false,
+    enableFamily: true,
   })
 );
